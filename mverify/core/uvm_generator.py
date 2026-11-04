@@ -11,6 +11,10 @@ def sv_type(port):
     name=port.get("name","")
     pos=decl.rfind(name)
     prefix=decl[:pos].strip() if pos>=0 else ""
+    # A DUT port declaration includes its direction (input/output/inout).
+    # An interface member is a variable, not a module port declaration.
+    prefix=re.sub(r"^\s*(input|output|inout|ref)\b\s*", "", prefix)
+    prefix=re.sub(r"\bvar\b", "", prefix).strip()
     if not prefix:
         width=port.get("width","scalar/unspecified")
         prefix="logic "+(width if width!="scalar/unspecified" else "")
@@ -95,25 +99,21 @@ def generate_uvm_project(scan_report, output_dir, top_module=None):
         "  rand bit [31:0] data;\n"
         "  function new(string name=\"mverify_transaction\"); super.new(name); endfunction\n"
         "endclass\n")
-    (out/"sequences/mverify_smoke_sequence.sv").write_text(
-        'class mverify_smoke_sequence extends uvm_sequence #(mverify_transaction);\\n'
-        '  `uvm_object_utils(mverify_smoke_sequence)\\n'
-        '  function new(string name="mverify_smoke_sequence"); super.new(name); endfunction\\n'
-        '  task body(); mverify_transaction tr; tr=mverify_transaction::type_id::create("tr");\\n'
-        '    start_item(tr); if (!tr.randomize()) `uvm_error("RAND","Randomization failed"); finish_item(tr);\\n'
-        '  endtask\\nendclass\\n')
+    # Deliberately do not emit a random 32-bit smoke sequence. A generic
+    # transaction cannot represent legal PCIe traffic and can mislead users.
     agent_names=[]
     pkg=["package mverify_uvm_pkg;","  import uvm_pkg::*;","  `include \"uvm_macros.svh\"",
          "  `include \"mverify_items.sv\""]
     for g in sorted(groups): pkg.append('  `include "agents/%s_agent.sv"'%safe(g))
-    pkg += ['  `include "sequences/mverify_smoke_sequence.sv"',
-            '  `include "env/mverify_scoreboard.sv"','  `include "env/mverify_env.sv"',
+    pkg += ['  `include "env/mverify_scoreboard.sv"','  `include "env/mverify_env.sv"',
             '  `include "tests/mverify_base_test.sv"',"endpackage"]
     (out/"mverify_uvm_pkg.sv").write_text("\n".join(pkg)+"\n")
     for g, plist in sorted(groups.items()):
         gn=safe(g); a="mverify_"+gn+"_agent"; agent_names.append(a)
         vif="mverify_%s_if"%gn
-        active=(gn != "clock_reset" and any(x.get("direction") in ("input","inout") and x.get("name") not in ("clk","rst_n","reset","reset_n") for x in plist))
+        # No active driver is generated from names alone. Protocol-aware stimulus
+        # requires an approved interface/protocol model and explicit signal semantics.
+        active=False
         prefix="mverify_"+gn
         lines=[
           "class %s_sequencer extends uvm_sequencer #(mverify_transaction);"%prefix,
@@ -183,22 +183,16 @@ def generate_uvm_project(scan_report, output_dir, top_module=None):
             "    // TODO: connect each monitor analysis port to scoreboard and coverage subscribers.",
             "  endfunction","endclass"]
     (out/"env/mverify_env.sv").write_text("\n".join(env)+"\n")
-    active_name = None
-    for g, plist in sorted(groups.items()):
-        if g != "clock_reset" and any(x.get("direction") in ("input", "inout") and x.get("name") not in ("clk", "rst_n", "reset", "reset_n") for x in plist):
-            active_name = safe(g) + "_agt"
-            break
-    seq_start = ('    mverify_smoke_sequence seq; seq=mverify_smoke_sequence::type_id::create("seq"); seq.start(env.%s.sequencer);\n' % active_name) if active_name else '    // No active DUT input interface was identified.\n'
     (out/"tests/mverify_base_test.sv").write_text(
-        'class mverify_base_test extends uvm_test;\n'
-        '  `uvm_component_utils(mverify_base_test)\n'
-        '  mverify_env env;\n'
-        '  function new(string name="mverify_base_test", uvm_component parent=null); super.new(name,parent); endfunction\n'
-        '  function void build_phase(uvm_phase phase); super.build_phase(phase); env=mverify_env::type_id::create("env",this); endfunction\n'
-        '  task run_phase(uvm_phase phase); phase.raise_objection(this);\n'
-        + seq_start +
-        '    phase.drop_objection(this); endtask\n'
-        'endclass\n')
+        'class mverify_base_test extends uvm_test;\\n'
+        '  `uvm_component_utils(mverify_base_test)\\n'
+        '  mverify_env env;\\n'
+        '  function new(string name="mverify_base_test", uvm_component parent=null); super.new(name,parent); endfunction\\n'
+        '  function void build_phase(uvm_phase phase); super.build_phase(phase); env=mverify_env::type_id::create("env",this); endfunction\\n'
+        '  task run_phase(uvm_phase phase); phase.raise_objection(this);\\n'
+        '    `uvm_info("MVERIFY_SCAFFOLD", "Topology-only compile smoke test. No protocol stimulus or functional checking is enabled.", UVM_LOW)\\n'
+        '    #1; phase.drop_objection(this); endtask\\n'
+        'endclass\\n')
     top_lines=["module mverify_tb_top;","  import uvm_pkg::*;","  import mverify_uvm_pkg::*;",
                "  bit clk=0; always #5 clk=~clk;"]
     for g in sorted(groups): top_lines.append("  mverify_%s_if %s(clk);"%(safe(g),safe(g)+"_vif"))
@@ -222,7 +216,11 @@ def generate_uvm_project(scan_report, output_dir, top_module=None):
     manifest={"dut_top":top,"dut_ports":ports,"interface_groups":groups,
               "hierarchy":scan_report.get("hierarchy",[]),"rtl_files":scan_report.get("files",[]),
               "generated_at":datetime.utcnow().isoformat()+"Z",
-              "limitations":["Review declarations against source package typedefs.",
+              "generation_mode":"passive_compile_scaffold",
+              "limitations":["This output is a compile/topology scaffold, not a functional PCIe testbench.",
+                             "No active pin-level driver or random protocol sequence is generated from port names.",
+                             "Monitors and scoreboard require protocol-specific transaction decoding and expected models.",
+                             "Review declarations against source package typedefs.",
                "DUT instance, port connections, virtual-interface config_db, protocol drivers/sequences, scoreboard and coverage need engineering completion.",
                "No simulator compile or execution was performed."]}
     (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
@@ -231,16 +229,24 @@ def generate_uvm_project(scan_report, output_dir, top_module=None):
     manifest["rtl_compile_order"] = ordered_rtl
     (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
     flist=["+incdir+.", "+incdir+interfaces", "+incdir+agents", "+incdir+env", "+incdir+tests"]
-    flist += ordered_rtl+interfaces+["mverify_items.sv","mverify_uvm_pkg.sv","mverify_tb_top.sv"]
+    flist += ordered_rtl+interfaces+["mverify_uvm_pkg.sv","mverify_tb_top.sv"]
     (out/"mverify.f").write_text("\n".join(flist)+"\n")
     (out/"compile_vcs.sh").write_text(
-        "#!/bin/bash\\nset -e\\n"
+        "#!/bin/bash\nset -e\n"
         "vcs -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps "
-        "-f mverify.f -top mverify_tb_top -o simv_mverify\\n")
+        "-f mverify.f -top mverify_tb_top -o simv_mverify\n")
     (out/"compile_vcs.sh").chmod(0o755)
     (out/"README_GENERATED.md").write_text(
         "# Mverify generated UVM skeleton\n\nDUT top: `%s`\n\n"%top+
         "This is an editable UVM 1.2 architecture skeleton. It uses parsed DUT port declarations and creates signal-family interfaces, UVM agents, an environment, scoreboard, base test and compile file list.\n\n"
         "## Required before simulation\n1. Review generated interface types and compile order.\n2. Add the DUT instance and named port connections.\n3. Add virtual-interface config_db setup.\n4. Implement protocol-specific sequence items, drivers and monitors.\n5. Connect monitor analysis ports to scoreboard and coverage.\n6. Compile with VCS and resolve project-specific dependencies.\n\nNo compile, simulation, functional pass, or compliance result is claimed.\n")
+    (out/"GENERATION_STATUS.md").write_text(
+        "# Mverify generated UVM status\\n\\n"
+        "Generation mode: **passive compile/topology scaffold**.\\n\\n"
+        "This output does not claim protocol verification. No random pin-level stimulus is generated. "
+        "Drivers, transaction decoders, reference models, assertions and functional coverage must be "
+        "generated only after interface semantics and approved protocol requirements are available.\\n\\n"
+        "A successful UVM run with this scaffold proves only that the generated testbench topology "
+        "can elaborate and start. It does not prove DUT functionality or PCIe compliance.\\n")
     return {"output_dir":str(out),"top":top,"ports":len(ports),"agents":agent_names,
             "interfaces":interfaces,"files":len(list(out.rglob("*")))}

@@ -6,6 +6,7 @@ import re
 from .rtl_parser import parse_rtl_file, _remove_comments
 from mverify.protocols.pcie.discovery import discover_pcie
 from .feature_analyzer import analyze_features
+from .rtl_semantic_analyzer import analyze_semantics
 
 LOG = logging.getLogger(__name__)
 RTL_SUFFIXES = {".v", ".vh", ".sv", ".svh"}
@@ -102,5 +103,6 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     report["_source_text"] = source_texts
     report["architecture_discovery"] = discover_pcie(report)
     report["feature_analysis"] = feature_report
+    report["semantic_analysis"] = analyze_semantics(module_details, edges)
     report.pop("_source_text", None)
     return report

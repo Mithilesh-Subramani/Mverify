@@ -17,7 +17,7 @@ initialize_database(config.database_path)
 
 st.title("Mverify")
 st.caption("Local-first RTL design verification assistant")
-st.info("Mverify v0.6.2 — feature-centric RTL analysis, evidence-based requirement triage, and UVM skeleton generation.")
+st.info("Mverify v0.7.0 — feature discovery, lexical semantic evidence, specification traceability, and passive UVM scaffold generation.")
 
 with st.sidebar:
     st.header("Project")
@@ -73,6 +73,29 @@ if report:
     else:
         st.warning("No feature patterns were detected. This does not prove that the DUT has no features.")
     st.caption(feature_analysis.get("coverage_note", "Feature analysis is a static first pass."))
+
+    semantic = report.get("semantic_analysis", {})
+    if semantic:
+        st.subheader("RTL behaviour evidence")
+        st.caption("This view extracts candidate writes, reads, continuous assignments and state-machine case blocks. It is not a fully elaborated SystemVerilog data-flow graph.")
+        semantic_modules = semantic.get("modules", [])
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Modules analysed", len(semantic_modules))
+        s2.metric("State-machine candidates", sum(len(x.get("state_machine_candidates", [])) for x in semantic_modules))
+        s3.metric("Continuous assignments", sum(len(x.get("continuous_assignments", [])) for x in semantic_modules))
+        with st.expander("Inspect per-module semantic evidence"):
+            for sm in semantic_modules:
+                st.markdown(f"**{sm.get('module')}** — `{sm.get('source_file')}`")
+                st.write("Procedural blocks:", sm.get("procedural_block_count"))
+                st.write("Write candidates:", ", ".join(sm.get("write_candidates", [])[:80]) or "None detected")
+                for fsm in sm.get("state_machine_candidates", []):
+                    st.write("State selector:", fsm.get("selector"))
+                    st.write("Case labels:", ", ".join(fsm.get("case_labels", [])))
+                    st.write("Transition targets:", ", ".join(fsm.get("transition_targets", [])))
+                if sm.get("continuous_assignments"):
+                    st.json(sm["continuous_assignments"])
+        for limitation in semantic.get("limitations", []):
+            st.caption("Limitation: " + limitation)
 
     discovery = report.get("architecture_discovery", {})
     if discovery:
@@ -176,6 +199,7 @@ if report:
                     st.json({"rtl_evidence": item["rtl_evidence"],
                              "layer_evidence": item["layer_evidence"],
                              "feature_evidence": item.get("feature_evidence", []),
+                             "semantic_evidence": item.get("semantic_evidence", []),
                              "mapping_note": item["mapping_note"]})
             st.download_button(
                 "Download requirement evidence matrix (JSON)",
@@ -231,7 +255,8 @@ if report:
 
             st.divider()
             st.subheader("UVM architecture and source generator")
-            st.caption("Generates editable UVM 1.2 skeleton files inside the RTL project in a separate mverify_uvm_generated directory. It does not modify RTL files.")
+            st.warning("This release generates a passive compile/topology scaffold. It deliberately does not generate random pin-level PCIe stimulus. Functional drivers, monitors, reference models, assertions and coverage require an approved protocol/interface model.")
+            st.caption("Generated files are isolated in mverify_uvm_generated. RTL source files are not modified. A successful scaffold run is not a functional verification pass.")
             selected = report.get("selected_top")
             candidates_top = report.get("top_candidates", [])
             top_options = sorted(set(([selected] if selected else []) + candidates_top))
@@ -252,7 +277,7 @@ if report:
             if generated:
                 st.write("Generated directory: `%s`"%generated["output_dir"])
                 st.write("Agents: "+", ".join(generated["agents"]))
-                st.warning("This is a structural skeleton. Review TODO markers, add DUT instance connections, protocol behavior, config_db setup, scoreboard checks, and compile order before VCS simulation.")
+                st.warning("Generation mode: passive compile/topology scaffold. No active driver, legal PCIe sequence, transaction decoder, reference model, or functional scoreboard is claimed. Inspect GENERATION_STATUS.md before compiling.")
 
     st.subheader("Top-level candidates")
     st.write(report.get("top_candidates", []))

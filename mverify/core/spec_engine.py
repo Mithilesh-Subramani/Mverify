@@ -41,8 +41,17 @@ def extract_candidate_requirements(text: str, source_name: str = "specification"
     normative = re.compile(
         r"\b(shall|must|required|is required to|shall not|must not|should)\b", re.I
     )
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        statement = _clean_statement(raw)
+    lines = text.splitlines()
+    current_clause = ""
+    current_heading = ""
+    for line_no, raw in enumerate(lines, start=1):
+        heading = _clean_statement(raw)
+        # Preserve common numbered clause headings as context, but do not claim
+        # they are authoritative clause IDs unless the source actually contains them.
+        if re.match(r"^(?:[0-9]+(?:\.[0-9A-Za-z]+){0,6}|[A-Z]\.[0-9]+)\s+\S", heading):
+            current_clause = heading.split()[0]
+            current_heading = heading[:300]
+        statement = heading
         if len(statement) < 18 or len(statement) > 1200 or not normative.search(statement):
             continue
         digest = hashlib.sha1(statement.lower().encode("utf-8")).hexdigest()[:10]
@@ -54,6 +63,10 @@ def extract_candidate_requirements(text: str, source_name: str = "specification"
             "statement": statement,
             "source": source_name,
             "source_line": line_no,
+            "detected_clause_candidate": current_clause,
+            "clause_heading_context": current_heading,
+            "context_before": _clean_statement(lines[line_no-2])[:500] if line_no > 1 else "",
+            "context_after": _clean_statement(lines[line_no])[:500] if line_no < len(lines) else "",
             "category": "unclassified",
             "review_status": "needs_review",
             "extraction_method": "normative_keyword_line",
@@ -91,6 +104,8 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
     hierarchy = scan_report.get("hierarchy", [])
     layers = scan_report.get("architecture_discovery", {}).get("layers", {})
     feature_inventory = scan_report.get("feature_analysis", {}).get("features", [])
+    semantic_modules = scan_report.get("semantic_analysis", {}).get("modules", [])
+    semantic_by_module = {m.get("module"): m for m in semantic_modules}
     module_text = []
     for m in modules:
         ports = " ".join(p.get("name", "") for p in m.get("ports", []))
@@ -118,6 +133,24 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
             hits.append({"module": None, "matched_terms": edge_terms,
                          "evidence_type": "hierarchy_name"})
         # Feature-level evidence is protocol-agnostic and can cross layer boundaries.
+        # Match requirement terms against semantic evidence candidates as well as names.
+        semantic_hits = []
+        for module_name, sem in semantic_by_module.items():
+            signals = set(sem.get("write_candidates", [])) | set(sem.get("read_identifier_candidates", []))
+            state_names = {x.get("selector", "") for x in sem.get("state_machine_candidates", [])}
+            state_names.update(y for x in sem.get("state_machine_candidates", []) for y in x.get("case_labels", []))
+            evidence_terms = {x.lower() for x in signals | state_names if x}
+            overlap = sorted(t for t in terms if t in evidence_terms)
+            if overlap:
+                semantic_hits.append({
+                    "module": module_name,
+                    "matched_signal_or_state_terms": overlap,
+                    "write_candidates": sorted(signals & set(overlap)),
+                    "state_machine_candidates": [x for x in sem.get("state_machine_candidates", [])
+                                                 if x.get("selector", "").lower() in overlap
+                                                 or any(y.lower() in overlap for y in x.get("case_labels", []))],
+                    "evidence_type": "lexical_semantic_signal_state_candidate",
+                })
         feature_hits = []
         for feature in feature_inventory:
             feature_terms = _tokens(feature.get("feature", "") + " " + feature.get("feature_id", ""))
@@ -145,9 +178,10 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
                 if detail.get("evidence"):
                     layer_hits.append({"layer": layer, "status": detail.get("status"),
                                        "evidence": detail.get("evidence", [])})
-        if hits or layer_hits:
+        if hits or layer_hits or semantic_hits:
             status = "structural_evidence_found"
-            confidence = "medium" if len(hits) + len(layer_hits) > 1 else "low"
+            evidence_groups = len(hits) + len(layer_hits) + len(semantic_hits)
+            confidence = "medium" if evidence_groups > 1 else "low"
         else:
             status, confidence = "no_matching_structural_evidence", "low"
         mapped.append({
@@ -157,7 +191,8 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
             "rtl_evidence": hits,
             "layer_evidence": layer_hits,
             "feature_evidence": feature_hits,
+            "semantic_evidence": semantic_hits,
             "verification_status": "not_verified",
-            "mapping_note": "A name or structural match is not proof that the requirement is implemented correctly or has passed simulation."
+            "mapping_note": "Evidence is a lexical candidate match against module/port names, feature candidates, or semantic signal/state candidates. It is not a resolved driver-to-consumer trace and does not prove functional implementation."
         })
     return mapped

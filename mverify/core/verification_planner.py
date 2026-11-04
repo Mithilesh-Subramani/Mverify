@@ -142,7 +142,8 @@ def generate_verification_plan(mapped_requirements: list[dict[str, Any]]) -> lis
         decomp = decompose_requirement(req)
         dimensions = _requirement_test_dimensions(statement)
         source = req.get("source") or "unspecified specification source"
-        clause = req.get("clause") or req.get("section") or "not supplied"
+        clause = req.get("clause") or req.get("section") or req.get("detected_clause_candidate") or "not supplied"
+        clause_source = "engineer_supplied" if req.get("clause") or req.get("section") else ("detected_heading_candidate" if req.get("detected_clause_candidate") else "missing")
         approved = (req.get("review_status") or "needs_review").lower() == "approved"
         mapped = req.get("mapping_status") == "structural_evidence_found"
         scenarios = []
@@ -163,6 +164,12 @@ def generate_verification_plan(mapped_requirements: list[dict[str, Any]]) -> lis
             "specification_basis": {
                 "source": source,
                 "clause_or_section": clause,
+                "clause_reference_status": clause_source,
+                "clause_heading_context": req.get("clause_heading_context", ""),
+                "surrounding_context": {
+                    "before": req.get("context_before", ""),
+                    "after": req.get("context_after", ""),
+                },
                 "revision": req.get("spec_revision") or "not supplied",
                 "review_status": req.get("review_status", "needs_review"),
                 "basis_note": "The plan is anchored to this extracted requirement. Clause context and revision must be confirmed; no missing PCIe rule or numeric limit is invented.",
@@ -178,7 +185,7 @@ def generate_verification_plan(mapped_requirements: list[dict[str, Any]]) -> lis
             "missing_inputs": [
                 item for item, missing in [
                     ("Applicable PCIe specification revision", not req.get("spec_revision")),
-                    ("Exact clause/section reference", not (req.get("clause") or req.get("section"))),
+                    ("Engineer-confirmed exact clause/section reference", not (req.get("clause") or req.get("section"))),
                     ("Reviewed and approved requirement wording", not approved),
                     ("Observable RTL signals and driver/consumer path", not bool(req.get("rtl_evidence") or req.get("feature_evidence"))),
                     ("Exact preconditions, limits, and timing from clause", True),
