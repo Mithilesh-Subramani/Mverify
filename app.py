@@ -9,6 +9,7 @@ from mverify.core.spec_engine import extract_spec_text, extract_candidate_requir
 from mverify.core.verification_planner import generate_verification_plan
 from mverify.core.requirement_intelligence import apply_auto_triage
 from mverify.core.uvm_generator import generate_uvm_project
+from mverify.core.design_intelligence import build_dut_model, propose_architectures, generate_intelligence
 
 st.set_page_config(page_title="Mverify", page_icon="🧪", layout="wide")
 config = load_config()
@@ -17,7 +18,7 @@ initialize_database(config.database_path)
 
 st.title("Mverify")
 st.caption("Local-first RTL design verification assistant")
-st.info("Mverify v0.7.0 — feature discovery, lexical semantic evidence, specification traceability, and passive UVM scaffold generation.")
+st.info("Mverify v0.8.0 — DUT-specific verification reasoning, architecture proposals, and approval-led UVM generation.")
 
 with st.sidebar:
     st.header("Project")
@@ -183,7 +184,7 @@ if report:
                 st.session_state["mapped_requirements"] = mapped
                 st.success(f"Mapped {len(mapped)} approved requirements against the latest RTL scan.")
         mapped = st.session_state.get("mapped_requirements", [])
-        if mapped:
+        if mapped or report:
             st.subheader("Requirement-to-RTL evidence matrix")
             st.dataframe([{
                 "ID": x["requirement_id"],
@@ -210,74 +211,87 @@ if report:
 
             st.divider()
             st.subheader("Verification intelligence")
-            st.caption("This field labels the revision for traceability. It does not load the PCIe specification. Plans are only as reliable as the specification requirements and clause references already extracted and reviewed above. Upload the applicable specification and verify clause references before treating proposals as PCIe checks.")
+            st.caption("This analysis uses the current DUT scan and approved requirement-to-RTL evidence. It does not generate a fixed plan when inputs are missing.")
             spec_revision = st.text_input("Applicable PCIe specification revision", key="plan_spec_revision", placeholder="Example: PCI Express Base Specification Revision 4.0")
-            if st.button("Generate specification-led verification plan", type="primary"):
-                enriched = []
-                for item in mapped:
-                    row = dict(item)
-                    row["spec_revision"] = spec_revision.strip()
-                    row["protocol_context"] = "PCIe" if report.get("architecture_discovery", {}).get("protocol", {}).get("value") == "PCIe" else "not established"
-                    enriched.append(row)
-                plan = generate_verification_plan(enriched)
-                st.session_state["verification_plan"] = plan
-            plan = st.session_state.get("verification_plan", [])
-            if plan:
-                st.dataframe([{
-                    "Requirement": x["requirement_id"],
-                    "Spec revision": x["specification_basis"]["revision"],
-                    "RTL evidence": x["implementation_assessment"],
-                    "Plan status": x["plan_status"],
-                    "Scenarios": len(x["proposed_scenarios"]),
-                    "Execution": x["execution_status"],
-                } for x in plan], use_container_width=True)
-                with st.expander("Detailed verification plan"):
-                    for item in plan:
-                        st.markdown(f"**{item['requirement_id']} — Specification-led plan**")
-                        st.write(item["statement"])
-                        st.write("**Specification basis**")
-                        st.json(item["specification_basis"])
-                        st.write("**RTL implementation evidence (not proof of compliance)**")
-                        st.json({"assessment": item["implementation_assessment"], "rtl_evidence": item["rtl_evidence"], "feature_evidence": item["feature_evidence"]})
-                        st.write("**Requirement decomposition**")
-                        st.json(item.get("decomposition", {
-                            "decomposition_status": "unavailable",
-                            "message": "This plan record has no decomposition data. Regenerate the plan after updating Mverify."
-                        }))
-                        st.write("**Proposed scenarios**")
-                        st.json(item["proposed_scenarios"])
-                st.download_button(
-                    "Download verification plan (JSON)",
-                    data=__import__("json").dumps(plan, indent=2),
-                    file_name="mverify_verification_plan.json",
-                    mime="application/json",
-                )
-
-            st.divider()
-            st.subheader("UVM architecture and source generator")
-            st.warning("This release generates a passive compile/topology scaffold. It deliberately does not generate random pin-level PCIe stimulus. Functional drivers, monitors, reference models, assertions and coverage require an approved protocol/interface model.")
-            st.caption("Generated files are isolated in mverify_uvm_generated. RTL source files are not modified. A successful scaffold run is not a functional verification pass.")
-            selected = report.get("selected_top")
-            candidates_top = report.get("top_candidates", [])
-            top_options = sorted(set(([selected] if selected else []) + candidates_top))
-            if top_options:
-                chosen_top = st.selectbox("DUT top module", top_options, index=0)
-                output_dir = str(Path(report["project_dir"]) / "mverify_uvm_generated")
-                st.code(output_dir)
-                if st.button("Generate UVM files in RTL project"):
-                    try:
-                        result = generate_uvm_project(report, output_dir, chosen_top)
-                        st.session_state["uvm_generation"] = result
-                        st.success("Generated %s files for %s."%(result["files"],result["top"]))
-                    except Exception as exc:
-                        st.error("UVM generation failed: %s"%exc)
-            else:
-                st.warning("No top-level candidate is available. Select or fix the DUT top before generation.")
-            generated = st.session_state.get("uvm_generation")
-            if generated:
-                st.write("Generated directory: `%s`"%generated["output_dir"])
-                st.write("Agents: "+", ".join(generated["agents"]))
-                st.warning("Generation mode: passive compile/topology scaffold. No active driver, legal PCIe sequence, transaction decoder, reference model, or functional scoreboard is claimed. Inspect GENERATION_STATUS.md before compiling.")
+            use_ollama = st.checkbox("Use local Ollama for design reasoning", value=True, help="Ollama must be running locally. RTL and specification content are not sent to a cloud service.")
+            ollama_model = st.text_input("Ollama model", value="qwen2.5-coder:7b", key="intel_ollama_model")
+            ollama_url = st.text_input("Ollama URL", value="http://localhost:11434", key="intel_ollama_url")
+            if st.button("Analyze this DUT and design its verification strategy", type="primary"):
+                with st.spinner("Building DUT model, tracing evidence, and evaluating architecture options..."):
+                    enriched = []
+                    for item in mapped:
+                        row = dict(item); row["spec_revision"] = spec_revision.strip()
+                        row["protocol_context"] = "PCIe" if report.get("architecture_discovery", {}).get("protocol", {}).get("value") == "PCIe" else "not established"
+                        enriched.append(row)
+                    dut_model = build_dut_model(report, enriched, spec_revision)
+                    architectures = propose_architectures(dut_model)
+                    intelligence = generate_intelligence(dut_model, architectures, enriched, use_ollama, ollama_model.strip(), ollama_url.strip())
+                    st.session_state["dut_model"] = dut_model
+                    st.session_state["architecture_options"] = architectures
+                    st.session_state["verification_intelligence"] = intelligence
+                    st.session_state["intelligence_requirements"] = enriched
+            intelligence = st.session_state.get("verification_intelligence")
+            dut_model = st.session_state.get("dut_model")
+            architectures = st.session_state.get("architecture_options", [])
+            if intelligence and dut_model:
+                st.markdown("#### DUT-specific analysis")
+                st.write("**DUT:** `%s` | **Ports:** %s | **Requirements mapped:** %s" % (dut_model['dut_top'], dut_model['port_count'], dut_model['requirement_count']))
+                st.write("**Reasoning engine:** %s | **Local model:** %s" % (intelligence['reasoning_engine'], intelligence['model_status']))
+                for finding in intelligence.get("dut_specific_findings", []): st.write("- " + finding)
+                if intelligence.get("model_error"):
+                    st.warning("Ollama analysis was not available: " + intelligence["model_error"])
+                if intelligence.get("local_model_analysis"):
+                    ai = intelligence["local_model_analysis"]
+                    st.markdown("#### Local AI reasoning")
+                    st.write(ai.get("summary", ""))
+                    for key, title in [("rationale","Architecture rationale"),("dut_specific_test_priorities","DUT-specific test priorities"),("signal_mapping_questions","Signal mapping questions"),("risks","Risks"),("next_actions","Next actions")]:
+                        vals=ai.get(key,[])
+                        if vals:
+                            st.markdown("**%s**"%title)
+                            for v in vals: st.write("- "+str(v))
+                st.markdown("#### Verification architecture options")
+                for opt in architectures:
+                    with st.expander(opt['name'] + (" — recommended" if intelligence.get('architecture_recommendation',{}).get('id')==opt['id'] else "")):
+                        st.write(opt['when_to_use'])
+                        st.write("**Agents**")
+                        for agent in opt['agents']: st.write("- `%s` — %s [%s]"%(agent['name'],agent['role'],agent['mode']))
+                        st.write("**Advantages:** " + "; ".join(opt['advantages']))
+                        st.write("**Risks:** " + "; ".join(opt['risks']))
+                st.markdown("#### Select and approve an architecture")
+                default_id=intelligence.get('architecture_recommendation',{}).get('id','passive')
+                ids=[x['id'] for x in architectures]
+                idx=ids.index(default_id) if default_id in ids else 0
+                selected_id=st.selectbox("Architecture", ids, index=idx, format_func=lambda x: next(a['name'] for a in architectures if a['id']==x), key="approved_architecture_id")
+                selected_arch=next(a for a in architectures if a['id']==selected_id)
+                st.write(selected_arch['when_to_use'])
+                st.warning("Approval records your architecture choice. Active PCIe drivers are generated only after each pin/interface signal has a confirmed role, direction, clock, reset and handshake model. No serial PHY pins were inferred from a TLP/backend interface.")
+                approved=st.checkbox("I reviewed the architecture and approve this topology proposal", key="architecture_approved")
+                st.divider()
+                st.subheader("UVM architecture and source generator")
+                selected = report.get("selected_top")
+                candidates_top = report.get("top_candidates", [])
+                top_options = sorted(set(([selected] if selected else []) + candidates_top))
+                if top_options:
+                    chosen_top = st.selectbox("DUT top module", top_options, index=top_options.index(dut_model['dut_top']) if dut_model['dut_top'] in top_options else 0)
+                    output_dir = str(Path(report["project_dir"]) / "mverify_uvm_generated")
+                    st.code(output_dir)
+                    if st.button("Generate approved UVM architecture", disabled=not approved):
+                        try:
+                            result = generate_uvm_project(report, output_dir, chosen_top, architecture=selected_arch)
+                            st.session_state["uvm_generation"] = result
+                            st.success("Generated architecture package with %s files."%result["files"])
+                        except Exception as exc: st.error("UVM generation failed: %s"%exc)
+                generated = st.session_state.get("uvm_generation")
+                if generated:
+                    st.write("Generated directory: `%s`"%generated["output_dir"])
+                    st.write("Agents: "+", ".join(generated["agents"]))
+                    st.info("The approved architecture is saved with the generated project. Pin-level active driver generation is a separate stage and requires reviewed signal mappings. This prevents unsafe stimulus on incorrectly classified pins.")
+                st.markdown("#### Analysis evidence and limitations")
+                with st.expander("Inspect DUT model JSON"):
+                    st.json(dut_model)
+                with st.expander("Inspect full reasoning result"):
+                    st.json(intelligence)
+                st.download_button("Download DUT-specific intelligence report", data=__import__("json").dumps(intelligence,indent=2), file_name="mverify_dut_intelligence.json", mime="application/json")
 
     st.subheader("Top-level candidates")
     st.write(report.get("top_candidates", []))

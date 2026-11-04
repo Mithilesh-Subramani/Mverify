@@ -69,7 +69,7 @@ def order_rtl_sources(files):
     ordered.extend(x for x in paths if x not in package_paths)
     return ordered, sorted(package_defs.keys())
 
-def generate_uvm_project(scan_report, output_dir, top_module=None):
+def generate_uvm_project(scan_report, output_dir, top_module=None, architecture=None):
     modules=scan_report.get("module_details",[])
     top=top_module or scan_report.get("selected_top")
     if not top:
@@ -248,5 +248,16 @@ def generate_uvm_project(scan_report, output_dir, top_module=None):
         "generated only after interface semantics and approved protocol requirements are available.\\n\\n"
         "A successful UVM run with this scaffold proves only that the generated testbench topology "
         "can elaborate and start. It does not prove DUT functionality or PCIe compliance.\\n")
+    architecture = architecture or {"id":"passive", "name":"Passive observation-first", "agents":[]}
+    (out/"APPROVED_ARCHITECTURE.json").write_text(json.dumps({
+        "selected_architecture": architecture,
+        "dut_top": top,
+        "approval_scope": "Topology proposal only. Signal semantics and active pin-level drivers require explicit review.",
+        "interface_candidates": groups,
+        "active_driver_generation": "blocked_until_signal_mapping_approval"
+    }, indent=2))
+    manifest["selected_architecture"] = architecture
+    manifest["active_driver_generation"] = "blocked_until_signal_mapping_approval"
+    (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
     return {"output_dir":str(out),"top":top,"ports":len(ports),"agents":agent_names,
             "interfaces":interfaces,"files":len(list(out.rglob("*")))}
