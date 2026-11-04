@@ -17,7 +17,7 @@ initialize_database(config.database_path)
 
 st.title("Mverify")
 st.caption("Local-first RTL design verification assistant")
-st.info("Mverify v0.6 — RTL discovery, evidence-based requirement triage, and UVM skeleton generation.")
+st.info("Mverify v0.6.2 — feature-centric RTL analysis, evidence-based requirement triage, and UVM skeleton generation.")
 
 with st.sidebar:
     st.header("Project")
@@ -51,6 +51,29 @@ if report:
     elif report.get("top_candidates"):
         st.warning("Top-level module was not selected. Review the candidates below.")
 
+    feature_analysis = report.get("feature_analysis", {})
+    st.subheader("DUT feature inventory")
+    st.caption("Mverify searches for design functions across the full RTL. It does not require a feature to belong to a named protocol layer.")
+    features = feature_analysis.get("features", [])
+    if features:
+        st.dataframe([{
+            "Feature": x["feature"],
+            "Status": x["status"],
+            "Confidence": x["confidence"],
+            "Modules": ", ".join(x["modules_involved"]),
+            "Evidence hits": x["evidence_count"],
+        } for x in features], use_container_width=True)
+        with st.expander("Inspect feature evidence and source modules"):
+            for item in features:
+                st.markdown(f"**{item['feature']}** — {item['confidence']} confidence")
+                for module in item["evidence"]:
+                    st.write(f"Module: `{module['module']}` ({module['source_file']})")
+                    for evidence in module["evidence"]:
+                        st.code(evidence["evidence"])
+    else:
+        st.warning("No feature patterns were detected. This does not prove that the DUT has no features.")
+    st.caption(feature_analysis.get("coverage_note", "Feature analysis is a static first pass."))
+
     discovery = report.get("architecture_discovery", {})
     if discovery:
         st.subheader("Architecture discovery")
@@ -61,7 +84,7 @@ if report:
         a.metric("Detected protocol", p.get("value", "unknown"))
         b.metric("Device role", r.get("value", "unknown"))
         c.metric("PCIe generation", g.get("value", "unknown"))
-        st.caption("Structural estimates only. These are not protocol compliance results.")
+        st.caption("Protocol layers are optional context. The feature inventory above is the primary DUT discovery view. Structural estimates are not compliance results.")
         for layer, detail in discovery.get("layers", {}).items():
             with st.expander(f"{layer.replace('_', ' ').title()} — {detail.get('status')}"):
                 st.write(f"**Confidence:** {detail.get('confidence')}")
@@ -149,6 +172,7 @@ if report:
                     st.markdown(f"**{item['requirement_id']} — {item['statement']}**")
                     st.json({"rtl_evidence": item["rtl_evidence"],
                              "layer_evidence": item["layer_evidence"],
+                             "feature_evidence": item.get("feature_evidence", []),
                              "mapping_note": item["mapping_note"]})
             st.download_button(
                 "Download requirement evidence matrix (JSON)",

@@ -1,4 +1,11 @@
-# Mverify v0.6 — Evidence triage and UVM skeleton generation
+# Mverify v0.6.2 — Feature-centric RTL analysis
+
+## New in v0.6.2
+- Adds a protocol-agnostic DUT feature inventory. It searches for candidate functions such as clock/reset control, handshakes, state machines, buffering, arbitration, integrity checks, retry/recovery, credit flow, packet formatting, data paths, counters, memories, parameterization, backend interfaces, and clock-domain crossing.
+- Displays the modules and source evidence associated with each detected feature.
+- Adds feature evidence to requirement-to-RTL mapping. A requirement can map to a design feature even when it does not map cleanly to a named PCIe layer.
+- Keeps protocol/layer discovery as optional context. It is no longer the primary way to understand the DUT.
+- Adds tests for non-PCIe designs and feature-based requirement mapping.
 
 ## New in v0.6
 - Evidence-based requirement triage runs after specification extraction.

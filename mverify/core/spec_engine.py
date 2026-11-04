@@ -90,6 +90,7 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
     modules = scan_report.get("module_details", [])
     hierarchy = scan_report.get("hierarchy", [])
     layers = scan_report.get("architecture_discovery", {}).get("layers", {})
+    feature_inventory = scan_report.get("feature_analysis", {}).get("features", [])
     module_text = []
     for m in modules:
         ports = " ".join(p.get("name", "") for p in m.get("ports", []))
@@ -116,6 +117,19 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
         if edge_terms:
             hits.append({"module": None, "matched_terms": edge_terms,
                          "evidence_type": "hierarchy_name"})
+        # Feature-level evidence is protocol-agnostic and can cross layer boundaries.
+        feature_hits = []
+        for feature in feature_inventory:
+            feature_terms = _tokens(feature.get("feature", "") + " " + feature.get("feature_id", ""))
+            overlap = sorted(terms & feature_terms)
+            if overlap:
+                feature_hits.append({
+                    "feature": feature.get("feature"),
+                    "feature_id": feature.get("feature_id"),
+                    "modules_involved": feature.get("modules_involved", []),
+                    "matched_terms": overlap,
+                    "confidence": feature.get("confidence"),
+                })
         # Protocol category can add layer-level structural evidence.
         layer_hits = []
         category = (req.get("category") or "").lower()
@@ -142,6 +156,7 @@ def map_requirements(requirements: list[dict], scan_report: dict) -> list[dict]:
             "mapping_confidence": confidence,
             "rtl_evidence": hits,
             "layer_evidence": layer_hits,
+            "feature_evidence": feature_hits,
             "verification_status": "not_verified",
             "mapping_note": "A name or structural match is not proof that the requirement is implemented correctly or has passed simulation."
         })

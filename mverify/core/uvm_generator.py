@@ -24,6 +24,47 @@ def group_for(port):
     if "ack" in n or "nak" in n: return "ack"
     return "misc"
 
+
+def order_rtl_sources(files):
+    """Put SystemVerilog packages before modules that import/use them."""
+    paths=[str(x) for x in files if str(x).lower().endswith((".sv",".svh",".v",".vh"))]
+    package_defs={}
+    package_imports={}
+    package_refs={}
+    for path in paths:
+        try:
+            source=Path(path).read_text(errors="ignore")
+        except Exception:
+            continue
+        defs=re.findall(r"\bpackage\s+(?!end\b)([A-Za-z_]\w*)\s*;",source)
+        imports=re.findall(r"\bimport\s+([A-Za-z_]\w*)\s*::",source)
+        # Package-qualified type references, e.g. pcie_pkg::txn_kind_e.
+        refs=re.findall(r"\b([A-Za-z_]\w*)\s*::",source)
+        for name in defs:
+            package_defs[name]=path
+            package_imports.setdefault(path,set()).update(imports)
+            package_refs.setdefault(path,set()).update(refs)
+    package_paths=set(package_defs.values())
+    deps={}
+    for pkg,path in package_defs.items():
+        needed=(package_imports.get(path,set()) | package_refs.get(path,set()))
+        deps.setdefault(path,set()).update(package_defs[x] for x in needed if x in package_defs and package_defs[x]!=path)
+    ordered=[]
+    visiting=set()
+    visited=set()
+    def visit(path):
+        if path in visited: return
+        if path in visiting: return
+        visiting.add(path)
+        for dep in sorted(deps.get(path,())): visit(dep)
+        visiting.remove(path)
+        visited.add(path)
+        ordered.append(path)
+    for path in sorted(package_paths): visit(path)
+    # Keep non-package RTL after package declarations. Preserve original relative order.
+    ordered.extend(x for x in paths if x not in package_paths)
+    return ordered, sorted(package_defs.keys())
+
 def generate_uvm_project(scan_report, output_dir, top_module=None):
     modules=scan_report.get("module_details",[])
     top=top_module or scan_report.get("selected_top")
@@ -185,9 +226,18 @@ def generate_uvm_project(scan_report, output_dir, top_module=None):
                "DUT instance, port connections, virtual-interface config_db, protocol drivers/sequences, scoreboard and coverage need engineering completion.",
                "No simulator compile or execution was performed."]}
     (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
+    ordered_rtl, discovered_packages = order_rtl_sources(manifest["rtl_files"])
+    manifest["rtl_package_order"] = discovered_packages
+    manifest["rtl_compile_order"] = ordered_rtl
+    (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
     flist=["+incdir+.", "+incdir+interfaces", "+incdir+agents", "+incdir+env", "+incdir+tests"]
-    flist += manifest["rtl_files"]+interfaces+["mverify_items.sv","mverify_uvm_pkg.sv","mverify_tb_top.sv"]
+    flist += ordered_rtl+interfaces+["mverify_items.sv","mverify_uvm_pkg.sv","mverify_tb_top.sv"]
     (out/"mverify.f").write_text("\n".join(flist)+"\n")
+    (out/"compile_vcs.sh").write_text(
+        "#!/bin/bash\\nset -e\\n"
+        "vcs -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps "
+        "-f mverify.f -top mverify_tb_top -o simv_mverify\\n")
+    (out/"compile_vcs.sh").chmod(0o755)
     (out/"README_GENERATED.md").write_text(
         "# Mverify generated UVM skeleton\n\nDUT top: `%s`\n\n"%top+
         "This is an editable UVM 1.2 architecture skeleton. It uses parsed DUT port declarations and creates signal-family interfaces, UVM agents, an environment, scoreboard, base test and compile file list.\n\n"

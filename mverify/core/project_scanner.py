@@ -5,6 +5,7 @@ import re
 
 from .rtl_parser import parse_rtl_file, _remove_comments
 from mverify.protocols.pcie.discovery import discover_pcie
+from .feature_analyzer import analyze_features
 
 LOG = logging.getLogger(__name__)
 RTL_SUFFIXES = {".v", ".vh", ".sv", ".svh"}
@@ -78,6 +79,9 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     if not files:
         warnings.append("No Verilog/SystemVerilog source files were found in the selected directory.")
 
+    # Run feature analysis while module bodies are still available.
+    feature_report = analyze_features({"module_details": module_details, "_source_text": source_texts})
+
     # Remove parser-only body text from UI/report module details.
     public_modules = [{k: v for k, v in m.items() if k != "body"} for m in module_details]
     report = {
@@ -97,5 +101,6 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     }
     report["_source_text"] = source_texts
     report["architecture_discovery"] = discover_pcie(report)
+    report["feature_analysis"] = feature_report
     report.pop("_source_text", None)
     return report
