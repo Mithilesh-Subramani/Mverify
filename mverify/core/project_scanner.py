@@ -3,7 +3,8 @@ from pathlib import Path
 import logging
 import re
 
-from .rtl_parser import parse_rtl_file
+from .rtl_parser import parse_rtl_file, _remove_comments
+from mverify.protocols.pcie.discovery import discover_pcie
 
 LOG = logging.getLogger(__name__)
 RTL_SUFFIXES = {".v", ".vh", ".sv", ".svh"}
@@ -49,9 +50,13 @@ def _find_instances(module_details):
 def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     project_dir = Path(project_dir).expanduser().resolve()
     files = list(_rtl_files(project_dir))
-    module_details, warnings = [], []
+    module_details, warnings, source_texts = [], [], []
     for path in files:
         modules, file_warnings = parse_rtl_file(path)
+        try:
+            source_texts.append(_remove_comments(path.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            pass
         module_details.extend(modules)
         warnings.extend(file_warnings)
 
@@ -75,7 +80,7 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
 
     # Remove parser-only body text from UI/report module details.
     public_modules = [{k: v for k, v in m.items() if k != "body"} for m in module_details]
-    return {
+    report = {
         "project_dir": str(project_dir),
         "summary": {"rtl_files": len(files), "modules": len(module_details),
                     "hierarchy_instances": len(edges), "warnings": len(warnings)},
@@ -90,3 +95,7 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
             "No protocol compliance or functional pass/fail is inferred."
         ),
     }
+    report["_source_text"] = source_texts
+    report["architecture_discovery"] = discover_pcie(report)
+    report.pop("_source_text", None)
+    return report

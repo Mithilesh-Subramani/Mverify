@@ -2,28 +2,20 @@
 
 Local-first RTL design verification assistant.
 
-## Foundation v0.2 — structural discovery update
+## v0.5 — Verification Intelligence Engine
 
-This release improves the first-pass Verilog/SystemVerilog structural scan:
-- Handles parameterized module declarations: `module name #(parameters) (ports);`
-- Uses balanced delimiters for parameter and port lists.
-- Handles common ANSI port declarations and inherited directions.
-- Records likely child-module instances, including parameterized instances.
-- Reports likely top-level candidates and parser warnings.
-- Keeps project scans in local SQLite storage.
+### Added
+- Requirement classification into PCIe Transaction, Data Link, and Physical Layer candidates.
+- Engineer-provided category takes precedence over heuristic classification.
+- Requirement decomposition into actor, action, preconditions, expected result, negative behavior, and missing information.
+- Layer-oriented verification scenario proposals.
+- Requirement-to-RTL evidence carried into the plan.
+- Explicit draft, review, and not-executed statuses.
+- JSON export of verification plans.
 
-This is **not** a complete IEEE Verilog/SystemVerilog parser. It does not elaborate macros, packages, interfaces, generate blocks, typedef-based widths, bind statements, or conditional compilation. It does not prove that a module implements a protocol requirement. Hierarchy results are heuristic and must be reviewed.
-
-## Requirements
-
-- Python 3.10+
-- Linux development host (RHEL recommended)
-- Optional later integration: Ollama, Synopsys VCS, Verdi
-
-## Setup on RHEL
-
+### Run on Linux / RHEL
 ```bash
-unzip Mverify_foundation_v0.2.zip -d ~/Mverify
+unzip Mverify_foundation_v0.5.zip -d ~/Mverify
 cd ~/Mverify/Mverify
 python3 -m venv .venv
 source .venv/bin/activate
@@ -33,21 +25,24 @@ python -m pytest -q
 streamlit run app.py
 ```
 
-Open the local URL printed by Streamlit, normally http://localhost:8501.
+### Workflow
+1. Scan RTL.
+2. Upload specification or requirements CSV.
+3. Review extracted requirements and set `review_status=approved`.
+4. Map approved requirements to RTL.
+5. Generate verification plan.
+6. Review classifications, decompositions, missing information, and proposed scenarios.
+7. Export the plan JSON.
 
-## Scan a design
+### Status semantics
+- `draft_needs_engineer_review`: proposal requires review.
+- `proposed_not_executed`: scenario exists only as a plan.
+- `not_generated_or_run`: no executable test or simulation exists.
+- `not_verified`: no passing simulation evidence exists.
 
-1. Start Mverify.
-2. Enter the absolute path to the RTL project directory.
-3. Enter the exact DUT top-module name if known.
-4. Run the scan.
-5. Review the module list, ports, hierarchy, top candidates, and warnings.
-6. Download the JSON report.
-
-## Privacy
-
-The scanner reads local files only. It does not upload RTL or specifications. This milestone does not call Ollama.
-
-## Important
-
-A top candidate is a structural guess. Testbench modules and helper modules can also appear as candidates when source files are incomplete or hierarchy cannot be resolved. Select the actual DUT top manually. A successful parse is not proof of compile success or functional correctness.
+### Limitations
+- Classification and decomposition are deterministic heuristics, not semantic interpretation of the full specification.
+- No numeric limits, timing values, or protocol rules are invented.
+- Scenarios are generic proposals and require mapping to actual DUT interfaces.
+- This milestone does not generate UVM source, compile RTL, run VCS, or inspect waveforms.
+- Local-only processing; no remote AI service is used.

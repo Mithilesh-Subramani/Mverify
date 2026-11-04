@@ -5,6 +5,8 @@ from mverify.core.config import load_config
 from mverify.core.logging_setup import configure_logging
 from mverify.core.project_scanner import scan_project
 from mverify.storage.database import initialize_database, save_scan
+from mverify.core.spec_engine import extract_spec_text, extract_candidate_requirements, load_requirements_csv, map_requirements
+from mverify.core.verification_planner import generate_verification_plan
 
 st.set_page_config(page_title="Mverify", page_icon="🧪", layout="wide")
 config = load_config()
@@ -13,7 +15,7 @@ initialize_database(config.database_path)
 
 st.title("Mverify")
 st.caption("Local-first RTL design verification assistant")
-st.info("Milestone 0.1 — foundation and RTL project discovery. Protocol verification is not enabled yet.")
+st.info("Milestone 0.4/0.5 — PCIe architecture discovery, specification ingestion, and requirement-to-RTL evidence mapping.")
 
 with st.sidebar:
     st.header("Project")
@@ -46,6 +48,131 @@ if report:
         st.write(f"**Selected top:** `{report['selected_top']}`")
     elif report.get("top_candidates"):
         st.warning("Top-level module was not selected. Review the candidates below.")
+
+    discovery = report.get("architecture_discovery", {})
+    if discovery:
+        st.subheader("Architecture discovery")
+        p = discovery.get("protocol", {})
+        r = discovery.get("device_role", {})
+        g = discovery.get("generation", {})
+        a, b, c = st.columns(3)
+        a.metric("Detected protocol", p.get("value", "unknown"))
+        b.metric("Device role", r.get("value", "unknown"))
+        c.metric("PCIe generation", g.get("value", "unknown"))
+        st.caption("Structural estimates only. These are not protocol compliance results.")
+        for layer, detail in discovery.get("layers", {}).items():
+            with st.expander(f"{layer.replace('_', ' ').title()} — {detail.get('status')}"):
+                st.write(f"**Confidence:** {detail.get('confidence')}")
+                st.write(detail.get("interpretation"))
+                for item in detail.get("evidence", []): st.write(f"- {item}")
+        if discovery.get("boundaries"):
+            st.subheader("Detected layer boundaries")
+            st.dataframe(discovery["boundaries"], use_container_width=True)
+        st.subheader("Recommended verification scope")
+        st.dataframe(discovery.get("recommended_scope", []), use_container_width=True)
+        st.subheader("Discovery limitations")
+        for item in discovery.get("limitations", []): st.caption(f"• {item}")
+        with st.expander("Protocol and role evidence"):
+            st.json({"protocol": p, "device_role": r, "generation": g})
+
+    st.divider()
+    st.header("Specification and requirements")
+    st.caption("Upload a local specification or requirements document. Candidate extraction is heuristic. Review every requirement before using it as a verification target.")
+    spec_file = st.file_uploader("Upload specification", type=["txt", "md", "rst", "csv", "pdf", "docx"], key="spec_upload")
+    if spec_file is not None:
+        try:
+            suffix = Path(spec_file.name).suffix.lower()
+            temp_path = Path(config.log_dir).parent / f"mverify_spec_upload{suffix}"
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_bytes(spec_file.getvalue())
+            if suffix == ".csv":
+                candidates = load_requirements_csv(temp_path)
+            else:
+                spec_text = extract_spec_text(temp_path)
+                candidates = extract_candidate_requirements(spec_text, spec_file.name)
+            st.session_state["spec_candidates"] = candidates
+            st.session_state["spec_name"] = spec_file.name
+            st.success(f"Extracted {len(candidates)} candidate requirements from {spec_file.name}.")
+            if not candidates:
+                st.warning("No normative requirement lines were detected. Use a CSV with requirement_id, statement, category, source columns, or provide a text specification with one requirement per line.")
+        except Exception as exc:
+            st.error(f"Specification import failed: {exc}")
+
+    candidates = st.session_state.get("spec_candidates", [])
+    if candidates:
+        st.subheader("Candidate requirements — review before mapping")
+        edited = st.data_editor(
+            candidates,
+            use_container_width=True,
+            num_rows="dynamic",
+            disabled=["requirement_id", "source", "source_line", "extraction_method"],
+            key="requirements_editor",
+        )
+        if st.button("Map reviewed requirements to RTL", type="primary"):
+            approved = []
+            for item in edited:
+                item = dict(item)
+                if item.get("review_status") == "approved":
+                    approved.append(item)
+            if not approved:
+                st.warning("Approve at least one requirement in the Review status column before mapping.")
+            else:
+                mapped = map_requirements(approved, report)
+                st.session_state["mapped_requirements"] = mapped
+                st.success(f"Mapped {len(mapped)} approved requirements against the latest RTL scan.")
+        mapped = st.session_state.get("mapped_requirements", [])
+        if mapped:
+            st.subheader("Requirement-to-RTL evidence matrix")
+            st.dataframe([{
+                "ID": x["requirement_id"],
+                "Requirement": x["statement"],
+                "Review": x.get("review_status"),
+                "Mapping": x["mapping_status"],
+                "Confidence": x["mapping_confidence"],
+                "Verification": x["verification_status"],
+            } for x in mapped], use_container_width=True)
+            with st.expander("Detailed evidence for each requirement"):
+                for item in mapped:
+                    st.markdown(f"**{item['requirement_id']} — {item['statement']}**")
+                    st.json({"rtl_evidence": item["rtl_evidence"],
+                             "layer_evidence": item["layer_evidence"],
+                             "mapping_note": item["mapping_note"]})
+            st.download_button(
+                "Download requirement evidence matrix (JSON)",
+                data=__import__("json").dumps(mapped, indent=2),
+                file_name="mverify_requirement_evidence.json",
+                mime="application/json",
+            )
+
+            st.divider()
+            st.subheader("Verification intelligence")
+            st.caption("Creates reviewable test-plan proposals from approved requirements and their RTL evidence. It does not generate executable UVM or claim test execution.")
+            if st.button("Generate verification plan", type="primary"):
+                plan = generate_verification_plan(mapped)
+                st.session_state["verification_plan"] = plan
+            plan = st.session_state.get("verification_plan", [])
+            if plan:
+                st.dataframe([{
+                    "Requirement": x["requirement_id"],
+                    "Suggested layer": x["suggested_category"],
+                    "Plan status": x["plan_status"],
+                    "Scenarios": len(x["proposed_scenarios"]),
+                    "Execution": x["execution_status"],
+                } for x in plan], use_container_width=True)
+                with st.expander("Detailed verification plan"):
+                    for item in plan:
+                        st.markdown(f"**{item['requirement_id']} — {item['suggested_category']}**")
+                        st.write(item["statement"])
+                        st.write("**Decomposition**")
+                        st.json(item["decomposition"])
+                        st.write("**Proposed scenarios**")
+                        st.json(item["proposed_scenarios"])
+                st.download_button(
+                    "Download verification plan (JSON)",
+                    data=__import__("json").dumps(plan, indent=2),
+                    file_name="mverify_verification_plan.json",
+                    mime="application/json",
+                )
 
     st.subheader("Top-level candidates")
     st.write(report.get("top_candidates", []))
