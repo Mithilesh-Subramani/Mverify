@@ -7,6 +7,8 @@ from mverify.core.project_scanner import scan_project
 from mverify.storage.database import initialize_database, save_scan
 from mverify.core.spec_engine import extract_spec_text, extract_candidate_requirements, load_requirements_csv, map_requirements
 from mverify.core.verification_planner import generate_verification_plan
+from mverify.core.requirement_intelligence import apply_auto_triage
+from mverify.core.uvm_generator import generate_uvm_project
 
 st.set_page_config(page_title="Mverify", page_icon="🧪", layout="wide")
 config = load_config()
@@ -15,7 +17,7 @@ initialize_database(config.database_path)
 
 st.title("Mverify")
 st.caption("Local-first RTL design verification assistant")
-st.info("Milestone 0.4/0.5 — PCIe architecture discovery, specification ingestion, and requirement-to-RTL evidence mapping.")
+st.info("Mverify v0.6 — RTL discovery, evidence-based requirement triage, and UVM skeleton generation.")
 
 with st.sidebar:
     st.header("Project")
@@ -77,7 +79,7 @@ if report:
 
     st.divider()
     st.header("Specification and requirements")
-    st.caption("Upload a local specification or requirements document. Candidate extraction is heuristic. Review every requirement before using it as a verification target.")
+    st.caption("Upload a local specification. Mverify auto-approves only clear, testable requirements with supporting RTL evidence. Other candidates remain in review.")
     spec_file = st.file_uploader("Upload specification", type=["txt", "md", "rst", "csv", "pdf", "docx"], key="spec_upload")
     if spec_file is not None:
         try:
@@ -90,9 +92,12 @@ if report:
             else:
                 spec_text = extract_spec_text(temp_path)
                 candidates = extract_candidate_requirements(spec_text, spec_file.name)
+            # Auto-triage uses the current RTL scan as evidence. Ambiguous items stay in review.
+            premap = map_requirements(candidates, report)
+            candidates = apply_auto_triage(candidates, premap)
             st.session_state["spec_candidates"] = candidates
             st.session_state["spec_name"] = spec_file.name
-            st.success(f"Extracted {len(candidates)} candidate requirements from {spec_file.name}.")
+            st.success(f"Extracted and assessed {len(candidates)} candidate requirements from {spec_file.name}.")
             if not candidates:
                 st.warning("No normative requirement lines were detected. Use a CSV with requirement_id, statement, category, source columns, or provide a text specification with one requirement per line.")
         except Exception as exc:
@@ -100,7 +105,15 @@ if report:
 
     candidates = st.session_state.get("spec_candidates", [])
     if candidates:
-        st.subheader("Candidate requirements — review before mapping")
+        st.subheader("Requirement intelligence — automatic triage")
+        auto_counts = {}
+        for item in candidates: auto_counts[item.get("review_status","needs_review")] = auto_counts.get(item.get("review_status","needs_review"),0)+1
+        st.write(" | ".join("%s: %s"%(k,v) for k,v in sorted(auto_counts.items())))
+        with st.expander("Why did Mverify make these decisions?"):
+            for item in candidates:
+                st.write("%s — %s (confidence %.0f%%)"%(item["requirement_id"],item.get("auto_decision"),100*item.get("auto_confidence",0)))
+                st.caption(item.get("auto_reason",""))
+        st.subheader("Candidate requirements — engineer override available")
         edited = st.data_editor(
             candidates,
             use_container_width=True,
@@ -173,6 +186,31 @@ if report:
                     file_name="mverify_verification_plan.json",
                     mime="application/json",
                 )
+
+            st.divider()
+            st.subheader("UVM architecture and source generator")
+            st.caption("Generates editable UVM 1.2 skeleton files inside the RTL project in a separate mverify_uvm_generated directory. It does not modify RTL files.")
+            selected = report.get("selected_top")
+            candidates_top = report.get("top_candidates", [])
+            top_options = sorted(set(([selected] if selected else []) + candidates_top))
+            if top_options:
+                chosen_top = st.selectbox("DUT top module", top_options, index=0)
+                output_dir = str(Path(report["project_dir"]) / "mverify_uvm_generated")
+                st.code(output_dir)
+                if st.button("Generate UVM files in RTL project"):
+                    try:
+                        result = generate_uvm_project(report, output_dir, chosen_top)
+                        st.session_state["uvm_generation"] = result
+                        st.success("Generated %s files for %s."%(result["files"],result["top"]))
+                    except Exception as exc:
+                        st.error("UVM generation failed: %s"%exc)
+            else:
+                st.warning("No top-level candidate is available. Select or fix the DUT top before generation.")
+            generated = st.session_state.get("uvm_generation")
+            if generated:
+                st.write("Generated directory: `%s`"%generated["output_dir"])
+                st.write("Agents: "+", ".join(generated["agents"]))
+                st.warning("This is a structural skeleton. Review TODO markers, add DUT instance connections, protocol behavior, config_db setup, scoreboard checks, and compile order before VCS simulation.")
 
     st.subheader("Top-level candidates")
     st.write(report.get("top_candidates", []))

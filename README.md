@@ -1,48 +1,47 @@
-# Mverify
+# Mverify v0.6 — Evidence triage and UVM skeleton generation
 
-Local-first RTL design verification assistant.
+## New in v0.6
+- Evidence-based requirement triage runs after specification extraction.
+- Clear normative, observable requirements with matching RTL structural/layer evidence are auto-approved for planning.
+- Headings and verification-process descriptions are rejected as DUT requirements.
+- Ambiguous or unsupported candidates remain `needs_review`.
+- Every decision includes a confidence value and human-readable reason.
+- Generate UVM 1.2 skeleton source under `<RTL project>/mverify_uvm_generated`.
+- Generated output includes signal-family interfaces, transaction item, sequencer/driver/monitor/agent classes, environment, scoreboard, base test, smoke sequence, top-level DUT instantiation with named port mapping, virtual-interface config_db setup, file list, and manifest.
+- RTL source files are not modified. Generated files are isolated in a separate directory.
 
-## v0.5 — Verification Intelligence Engine
-
-### Added
-- Requirement classification into PCIe Transaction, Data Link, and Physical Layer candidates.
-- Engineer-provided category takes precedence over heuristic classification.
-- Requirement decomposition into actor, action, preconditions, expected result, negative behavior, and missing information.
-- Layer-oriented verification scenario proposals.
-- Requirement-to-RTL evidence carried into the plan.
-- Explicit draft, review, and not-executed statuses.
-- JSON export of verification plans.
-
-### Run on Linux / RHEL
+## Run
+Use Python 3.11 or newer in a virtual environment:
 ```bash
-unzip Mverify_foundation_v0.5.zip -d ~/Mverify
-cd ~/Mverify/Mverify
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 python -m pytest -q
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
-### Workflow
-1. Scan RTL.
-2. Upload specification or requirements CSV.
-3. Review extracted requirements and set `review_status=approved`.
-4. Map approved requirements to RTL.
-5. Generate verification plan.
-6. Review classifications, decompositions, missing information, and proposed scenarios.
-7. Export the plan JSON.
+## Workflow
+1. Scan the directory that contains the DUT RTL.
+2. Select the correct DUT top if discovery finds more than one candidate.
+3. Upload the DUT specification.
+4. Mverify classifies candidates and auto-approves only those with clear normative/observable language and supporting structural evidence.
+5. Review ambiguous candidates. You can override statuses in the table.
+6. Map approved requirements and inspect evidence.
+7. Select the DUT top and click **Generate UVM files in RTL project**.
+8. Review `<RTL project>/mverify_uvm_generated`.
 
-### Status semantics
-- `draft_needs_engineer_review`: proposal requires review.
-- `proposed_not_executed`: scenario exists only as a plan.
-- `not_generated_or_run`: no executable test or simulation exists.
-- `not_verified`: no passing simulation evidence exists.
+## Approval semantics
+`approved` means a requirement is eligible for verification planning. It does not mean that RTL implements it or passes simulation. Structural names and hierarchy are evidence for planning only.
 
-### Limitations
-- Classification and decomposition are deterministic heuristics, not semantic interpretation of the full specification.
-- No numeric limits, timing values, or protocol rules are invented.
-- Scenarios are generic proposals and require mapping to actual DUT interfaces.
-- This milestone does not generate UVM source, compile RTL, run VCS, or inspect waveforms.
-- Local-only processing; no remote AI service is used.
+## UVM generator limitations — important
+The generator creates an actual editable UVM component tree and top-level named DUT port connections. It is still a skeleton, not a complete protocol-aware verification environment:
+- Generic transaction fields are placeholders.
+- Driver pin-level behavior and monitor sampling must be implemented for each protocol.
+- Scoreboard expected models and functional coverage must be completed.
+- Package dependencies and simulator compile order must be checked against the target RTL.
+- The generated code has not been compiled by VCS/Questa in this build environment. Do not treat generation as compile success.
+
+The current auto-triage engine is deterministic and explainable. It is not an LLM and does not train itself. Ollama-based semantic assistance and persistent engineer-feedback learning are future integration work. Deterministic evidence gates remain authoritative for auto-approval.
+
+## Validation
+The included Python unit tests cover existing v0.5 behavior plus requirement triage and UVM tree generation. They do not replace HDL compilation or simulation.
