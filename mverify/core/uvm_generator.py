@@ -184,15 +184,15 @@ def generate_uvm_project(scan_report, output_dir, top_module=None, architecture=
             "  endfunction","endclass"]
     (out/"env/mverify_env.sv").write_text("\n".join(env)+"\n")
     (out/"tests/mverify_base_test.sv").write_text(
-        'class mverify_base_test extends uvm_test;\\n'
-        '  `uvm_component_utils(mverify_base_test)\\n'
-        '  mverify_env env;\\n'
-        '  function new(string name="mverify_base_test", uvm_component parent=null); super.new(name,parent); endfunction\\n'
-        '  function void build_phase(uvm_phase phase); super.build_phase(phase); env=mverify_env::type_id::create("env",this); endfunction\\n'
-        '  task run_phase(uvm_phase phase); phase.raise_objection(this);\\n'
-        '    `uvm_info("MVERIFY_SCAFFOLD", "Topology-only compile smoke test. No protocol stimulus or functional checking is enabled.", UVM_LOW)\\n'
-        '    #1; phase.drop_objection(this); endtask\\n'
-        'endclass\\n')
+        'class mverify_base_test extends uvm_test;\n'
+        '  `uvm_component_utils(mverify_base_test)\n'
+        '  mverify_env env;\n'
+        '  function new(string name="mverify_base_test", uvm_component parent=null); super.new(name,parent); endfunction\n'
+        '  function void build_phase(uvm_phase phase); super.build_phase(phase); env=mverify_env::type_id::create("env",this); endfunction\n'
+        '  task run_phase(uvm_phase phase); phase.raise_objection(this);\n'
+        '    `uvm_info("MVERIFY_SCAFFOLD", "Topology-only compile smoke test. No protocol stimulus or functional checking is enabled.", UVM_LOW)\n'
+        '    #1; phase.drop_objection(this); endtask\n'
+        'endclass\n')
     top_lines=["module mverify_tb_top;","  import uvm_pkg::*;","  import mverify_uvm_pkg::*;",
                "  bit clk=0; always #5 clk=~clk;"]
     for g in sorted(groups): top_lines.append("  mverify_%s_if %s(clk);"%(safe(g),safe(g)+"_vif"))
@@ -241,13 +241,13 @@ def generate_uvm_project(scan_report, output_dir, top_module=None, architecture=
         "This is an editable UVM 1.2 architecture skeleton. It uses parsed DUT port declarations and creates signal-family interfaces, UVM agents, an environment, scoreboard, base test and compile file list.\n\n"
         "## Required before simulation\n1. Review generated interface types and compile order.\n2. Add the DUT instance and named port connections.\n3. Add virtual-interface config_db setup.\n4. Implement protocol-specific sequence items, drivers and monitors.\n5. Connect monitor analysis ports to scoreboard and coverage.\n6. Compile with VCS and resolve project-specific dependencies.\n\nNo compile, simulation, functional pass, or compliance result is claimed.\n")
     (out/"GENERATION_STATUS.md").write_text(
-        "# Mverify generated UVM status\\n\\n"
-        "Generation mode: **passive compile/topology scaffold**.\\n\\n"
+        "# Mverify generated UVM status\n\n"
+        "Generation mode: **passive compile/topology scaffold**.\n\n"
         "This output does not claim protocol verification. No random pin-level stimulus is generated. "
         "Drivers, transaction decoders, reference models, assertions and functional coverage must be "
-        "generated only after interface semantics and approved protocol requirements are available.\\n\\n"
+        "generated only after interface semantics and approved protocol requirements are available.\n\n"
         "A successful UVM run with this scaffold proves only that the generated testbench topology "
-        "can elaborate and start. It does not prove DUT functionality or PCIe compliance.\\n")
+        "can elaborate and start. It does not prove DUT functionality or PCIe compliance.\n")
     architecture = architecture or {"id":"passive", "name":"Passive observation-first", "agents":[]}
     (out/"APPROVED_ARCHITECTURE.json").write_text(json.dumps({
         "selected_architecture": architecture,

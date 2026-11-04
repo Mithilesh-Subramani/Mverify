@@ -66,3 +66,7 @@ The planner no longer selects generic test scenarios from a guessed PCIe layer. 
 Before relying on a plan, provide the exact specification revision and clause/section in the requirement table. Requirements without adequate clause context remain review items. Feature discovery remains useful for tracing implementation evidence, but the specification is the source of expected behavior.
 
 This release is a conservative planning improvement. It does not yet implement a complete PCI-SIG specification semantic model, full SystemVerilog elaboration, or automatic proof of PCIe compliance.
+
+
+## v0.8.1 Desktop application
+Run `python desktop_app.py` for the native Tkinter desktop window. Streamlit is no longer required. See `README_DESKTOP.md` for RHEL setup and Tkinter checks.

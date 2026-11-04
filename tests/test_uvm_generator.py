@@ -50,3 +50,26 @@ def test_generator_is_passive_and_filelist_does_not_compile_included_items_twice
     assert "mverify_uvm_pkg.sv" in flist
     assert not (out/"sequences/mverify_smoke_sequence.sv").exists()
     assert "generation_mode" in (out/"mverify_generation_manifest.json").read_text()
+
+
+def test_generated_base_test_uses_real_newlines(tmp_path):
+    from mverify.core.uvm_generator import generate_uvm_project
+    report = {
+        "selected_top": "dut_top",
+        "top_candidates": ["dut_top"],
+        "module_details": [{
+            "name": "dut_top",
+            "source_file": "dut_top.sv",
+            "ports": [
+                {"name": "clk", "direction": "input", "declaration": "input logic clk", "width": "scalar/unspecified"},
+                {"name": "out_valid", "direction": "output", "declaration": "output logic out_valid", "width": "scalar/unspecified"},
+            ],
+        }],
+        "rtl_files": [],
+    }
+    out = tmp_path / "generated"
+    generate_uvm_project(report, out, "dut_top")
+    source = (out / "tests/mverify_base_test.sv").read_text()
+    assert "\\\\n" not in source
+    assert "\n  `uvm_component_utils(mverify_base_test)\n" in source
+    assert source.count("\n") >= 5
