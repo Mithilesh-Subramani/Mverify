@@ -115,6 +115,9 @@ if report:
             else:
                 spec_text = extract_spec_text(temp_path)
                 candidates = extract_candidate_requirements(spec_text, spec_file.name)
+            # Preserve editable clause metadata for clause-level verification traceability.
+            for candidate in candidates:
+                candidate.setdefault("clause", "")
             # Auto-triage uses the current RTL scan as evidence. Ambiguous items stay in review.
             premap = map_requirements(candidates, report)
             candidates = apply_auto_triage(candidates, premap)
@@ -183,23 +186,35 @@ if report:
 
             st.divider()
             st.subheader("Verification intelligence")
-            st.caption("Creates reviewable test-plan proposals from approved requirements and their RTL evidence. It does not generate executable UVM or claim test execution.")
-            if st.button("Generate verification plan", type="primary"):
-                plan = generate_verification_plan(mapped)
+            st.caption("Specification-led planning: test intent comes from approved requirement wording and its cited PCIe clause. RTL features provide implementation evidence; they do not define protocol behavior by themselves.")
+            spec_revision = st.text_input("Applicable PCIe specification revision", key="plan_spec_revision", placeholder="Enter the exact revision used for this project")
+            if st.button("Generate specification-led verification plan", type="primary"):
+                enriched = []
+                for item in mapped:
+                    row = dict(item)
+                    row["spec_revision"] = spec_revision.strip()
+                    row["protocol_context"] = "PCIe" if report.get("architecture_discovery", {}).get("protocol", {}).get("value") == "PCIe" else "not established"
+                    enriched.append(row)
+                plan = generate_verification_plan(enriched)
                 st.session_state["verification_plan"] = plan
             plan = st.session_state.get("verification_plan", [])
             if plan:
                 st.dataframe([{
                     "Requirement": x["requirement_id"],
-                    "Suggested layer": x["suggested_category"],
+                    "Spec revision": x["specification_basis"]["revision"],
+                    "RTL evidence": x["implementation_assessment"],
                     "Plan status": x["plan_status"],
                     "Scenarios": len(x["proposed_scenarios"]),
                     "Execution": x["execution_status"],
                 } for x in plan], use_container_width=True)
                 with st.expander("Detailed verification plan"):
                     for item in plan:
-                        st.markdown(f"**{item['requirement_id']} — {item['suggested_category']}**")
+                        st.markdown(f"**{item['requirement_id']} — Specification-led plan**")
                         st.write(item["statement"])
+                        st.write("**Specification basis**")
+                        st.json(item["specification_basis"])
+                        st.write("**RTL implementation evidence (not proof of compliance)**")
+                        st.json({"assessment": item["implementation_assessment"], "rtl_evidence": item["rtl_evidence"], "feature_evidence": item["feature_evidence"]})
                         st.write("**Decomposition**")
                         st.json(item["decomposition"])
                         st.write("**Proposed scenarios**")

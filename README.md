@@ -52,3 +52,17 @@ The current auto-triage engine is deterministic and explainable. It is not an LL
 
 ## Validation
 The included Python unit tests cover existing v0.5 behavior plus requirement triage and UVM tree generation. They do not replace HDL compilation or simulation.
+
+## v0.6.3 — Specification-led PCIe verification planning
+
+Mverify separates three kinds of evidence:
+
+1. **Specification requirements:** extracted from the user-provided specification, with source file and line. The engineer must confirm the applicable PCIe revision and clause/section.
+2. **RTL implementation evidence:** feature candidates, module/port matches, and hierarchy evidence. These show where to investigate; they do not prove protocol correctness.
+3. **Verification evidence:** proposed requirement-derived test dimensions and, later, assertions/simulation results. A proposal is not an executed test or a compliance result.
+
+The planner no longer selects generic test scenarios from a guessed PCIe layer. It derives review prompts from each approved requirement's wording (for example, negative conditions, sequencing, timing/limits, handshake, resource boundaries, integrity/recovery, and initialization/configuration). Exact PCIe rules, numeric limits, timing, exceptions, and expected results must be taken from the cited specification revision and clause. Mverify must not invent missing values or silently substitute general protocol knowledge.
+
+Before relying on a plan, provide the exact specification revision and clause/section in the requirement table. Requirements without adequate clause context remain review items. Feature discovery remains useful for tracing implementation evidence, but the specification is the source of expected behavior.
+
+This release is a conservative planning improvement. It does not yet implement a complete PCI-SIG specification semantic model, full SystemVerilog elaboration, or automatic proof of PCIe compliance.

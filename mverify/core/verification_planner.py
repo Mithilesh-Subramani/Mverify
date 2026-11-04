@@ -100,41 +100,91 @@ def decompose_requirement(requirement: dict[str, Any]) -> dict[str, Any]:
         "decomposition_status": "draft_needs_engineer_review",
     }
 
+def _requirement_test_dimensions(statement: str) -> list[dict[str, str]]:
+    """Derive test dimensions from the actual requirement wording.
+
+    These are prompts for an engineer, not invented PCIe normative values.
+    """
+    text = statement.lower()
+    dimensions = []
+    rules = [
+        (r"shall not|must not|invalid|error|malformed|unsupported|reserved",
+         "negative_case", "Exercise the prohibited, invalid, malformed, or unsupported condition stated by the requirement."),
+        (r"when|if|while|after|before|until|upon",
+         "condition_and_sequence", "Exercise the stated condition and sequence. Extract exact ordering and preconditions from the specification context."),
+        (r"timeout|within|minimum|maximum|at least|no more than|shall be",
+         "timing_or_limit", "Check the stated timing or numeric limit. Obtain exact values and tolerances from the cited specification clause."),
+        (r"valid|ready|accept|transfer|transmit|receive|handshake",
+         "interface_handshake", "Check the specified interface event, acceptance condition, and stability during any wait state."),
+        (r"credit|flow control|buffer|full|empty",
+         "resource_boundary", "Check resource availability, exhaustion, update, and recovery as required by the cited clause."),
+        (r"crc|lcrc|ecrc|parity|integrity|sequence number|replay|nak|ack",
+         "protocol_integrity_or_recovery", "Check the required integrity, sequence, acknowledgement, and recovery behavior. Do not assume unspecified retry limits."),
+        (r"reset|initializ|training|configuration|negotia",
+         "initialization_and_configuration", "Check the specified initialization/configuration sequence and resulting observable state."),
+    ]
+    for pattern, kind, prompt in rules:
+        if re.search(pattern, text):
+            dimensions.append({"dimension": kind, "test_intent": prompt})
+    if not dimensions:
+        dimensions.append({
+            "dimension": "requirement_specific_behavior",
+            "test_intent": "Derive stimulus and checks from the complete specification clause and its referenced definitions. No generic test is assumed.",
+        })
+    return dimensions
+
+
 def generate_verification_plan(mapped_requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build spec-led verification proposals; never infer PCIe behavior from feature names alone."""
     plan = []
     for req in mapped_requirements:
-        classified = classify_requirement(req)
-        layer = classified["suggested_category"]
+        statement = (req.get("statement") or "").strip()
         decomp = decompose_requirement(req)
+        dimensions = _requirement_test_dimensions(statement)
+        source = req.get("source") or "unspecified specification source"
+        clause = req.get("clause") or req.get("section") or "not supplied"
+        approved = (req.get("review_status") or "needs_review").lower() == "approved"
+        mapped = req.get("mapping_status") == "structural_evidence_found"
         scenarios = []
-        if layer in LAYER_RULES:
-            rule = LAYER_RULES[layer]
-            # Keep scenarios relevant to requirement keywords; include broad baseline only
-            # when no scenario term overlaps.
-            text = (req.get("statement") or "").lower()
-            relevant = []
-            for scenario in rule["scenarios"]:
-                key = scenario[0].replace("_", " ")
-                if any(term in text for term in rule["terms"]) or not relevant:
-                    relevant.append(scenario)
-            scenarios = [{
-                "scenario_id": f'{req.get("requirement_id","REQ")}-{i+1:02d}',
-                "scenario_type": s[0],
-                "stimulus": s[1],
-                "expected_result": s[2],
-                "status": "proposed_not_executed",
-            } for i, s in enumerate(relevant[:3])]
+        if approved:
+            for i, dimension in enumerate(dimensions, start=1):
+                scenarios.append({
+                    "scenario_id": f'{req.get("requirement_id", "REQ")}-{i:02d}',
+                    "scenario_type": dimension["dimension"],
+                    "stimulus": dimension["test_intent"],
+                    "expected_result": "Extract the exact expected result, preconditions, timing, and exceptions from the cited PCIe specification clause before implementation.",
+                    "specification_source": source,
+                    "specification_clause": clause,
+                    "status": "proposal_requires_clause_review",
+                })
         plan.append({
             "requirement_id": req.get("requirement_id"),
-            "statement": req.get("statement"),
-            "review_status": req.get("review_status", "needs_review"),
-            **classified,
-            "decomposition": decomp,
-            "proposed_scenarios": scenarios,
-            "plan_status": "draft_needs_engineer_review",
-            "execution_status": "not_generated_or_run",
-            "source_mapping_status": req.get("mapping_status", "not_mapped"),
+            "statement": statement,
+            "specification_basis": {
+                "source": source,
+                "clause_or_section": clause,
+                "revision": req.get("spec_revision") or "not supplied",
+                "review_status": req.get("review_status", "needs_review"),
+                "basis_note": "The plan is anchored to this extracted requirement. Clause context and revision must be confirmed; no missing PCIe rule or numeric limit is invented.",
+            },
+            "protocol_context": "PCIe (only when established by project/specification evidence)" if req.get("protocol_context") == "PCIe" else req.get("protocol_context", "not established"),
+            "feature_evidence": req.get("feature_evidence", []),
             "rtl_evidence": req.get("rtl_evidence", []),
+            "source_mapping_status": req.get("mapping_status", "not_mapped"),
+            "implementation_assessment": "structural_evidence_found_not_functionally_proven" if mapped else "no_structural_match_or_not_mapped",
+            "derived_test_dimensions": dimensions if approved else [],
+            "proposed_scenarios": scenarios,
+            "missing_inputs": [
+                item for item, missing in [
+                    ("Applicable PCIe specification revision", not req.get("spec_revision")),
+                    ("Exact clause/section reference", not (req.get("clause") or req.get("section"))),
+                    ("Reviewed and approved requirement wording", not approved),
+                    ("Observable RTL signals and driver/consumer path", not bool(req.get("rtl_evidence") or req.get("feature_evidence"))),
+                    ("Exact preconditions, limits, and timing from clause", True),
+                ] if missing
+            ],
+            "plan_status": "draft_needs_engineer_review" if approved else "blocked_pending_requirement_approval",
+            "execution_status": "not_generated_or_run",
             "verification_status": "not_verified",
         })
     return plan
