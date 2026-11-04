@@ -39,6 +39,8 @@ if report:
     c1.metric("RTL files", report["summary"]["rtl_files"])
     c2.metric("Modules found", report["summary"]["modules"])
     c3.metric("Parse warnings", report["summary"]["warnings"])
+    if "hierarchy_instances" in report["summary"]:
+        st.caption(f"Likely hierarchy instances: {report['summary']['hierarchy_instances']}")
 
     if report.get("selected_top"):
         st.write(f"**Selected top:** `{report['selected_top']}`")
@@ -48,9 +50,17 @@ if report:
     st.subheader("Top-level candidates")
     st.write(report.get("top_candidates", []))
 
+    st.subheader("Discovered hierarchy")
+    hierarchy = report.get("hierarchy", [])
+    if hierarchy:
+        st.dataframe(hierarchy, use_container_width=True)
+    else:
+        st.caption("No child-module instances were identified by the structural scan.")
+
     st.subheader("Discovered modules")
     for module in report.get("module_details", []):
         with st.expander(f"{module['name']} — {module['source_file']}"):
+            st.write(f"**Port style:** {module.get('port_style', 'unknown')}")
             st.write(f"**Ports:** {len(module['ports'])}")
             if module["ports"]:
                 st.dataframe(module["ports"], use_container_width=True)
