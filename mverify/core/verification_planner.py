@@ -172,6 +172,7 @@ def generate_verification_plan(mapped_requirements: list[dict[str, Any]]) -> lis
             "rtl_evidence": req.get("rtl_evidence", []),
             "source_mapping_status": req.get("mapping_status", "not_mapped"),
             "implementation_assessment": "structural_evidence_found_not_functionally_proven" if mapped else "no_structural_match_or_not_mapped",
+            "decomposition": decomp,
             "derived_test_dimensions": dimensions if approved else [],
             "proposed_scenarios": scenarios,
             "missing_inputs": [

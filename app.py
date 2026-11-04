@@ -186,8 +186,8 @@ if report:
 
             st.divider()
             st.subheader("Verification intelligence")
-            st.caption("Specification-led planning: test intent comes from approved requirement wording and its cited PCIe clause. RTL features provide implementation evidence; they do not define protocol behavior by themselves.")
-            spec_revision = st.text_input("Applicable PCIe specification revision", key="plan_spec_revision", placeholder="Enter the exact revision used for this project")
+            st.caption("This field labels the revision for traceability. It does not load the PCIe specification. Plans are only as reliable as the specification requirements and clause references already extracted and reviewed above. Upload the applicable specification and verify clause references before treating proposals as PCIe checks.")
+            spec_revision = st.text_input("Applicable PCIe specification revision", key="plan_spec_revision", placeholder="Example: PCI Express Base Specification Revision 4.0")
             if st.button("Generate specification-led verification plan", type="primary"):
                 enriched = []
                 for item in mapped:
@@ -215,8 +215,11 @@ if report:
                         st.json(item["specification_basis"])
                         st.write("**RTL implementation evidence (not proof of compliance)**")
                         st.json({"assessment": item["implementation_assessment"], "rtl_evidence": item["rtl_evidence"], "feature_evidence": item["feature_evidence"]})
-                        st.write("**Decomposition**")
-                        st.json(item["decomposition"])
+                        st.write("**Requirement decomposition**")
+                        st.json(item.get("decomposition", {
+                            "decomposition_status": "unavailable",
+                            "message": "This plan record has no decomposition data. Regenerate the plan after updating Mverify."
+                        }))
                         st.write("**Proposed scenarios**")
                         st.json(item["proposed_scenarios"])
                 st.download_button(
