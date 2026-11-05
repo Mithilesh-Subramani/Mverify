@@ -1,1 +1,0 @@
-# Mcore core uses the Python standard library. Ollama runs as a separate local service.
