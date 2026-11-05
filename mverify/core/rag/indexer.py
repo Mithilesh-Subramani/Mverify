@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid
 from pathlib import Path
 from typing import Iterable
 
@@ -41,7 +42,7 @@ def _chunks(path: Path, root: Path, text: str, max_lines: int = 80) -> list[dict
         suffix = path.suffix.lower()
         kind = "rtl" if suffix in {".v", ".vh", ".sv", ".svh"} else "spec_or_document"
         output.append({
-            "id": digest[:32],
+            "id": str(uuid.UUID(hex=digest[:32])),
             "text": body,
             "source_file": relative,
             "start_line": start + 1,
