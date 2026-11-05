@@ -42,7 +42,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             return _json(self, 200, {"service": "Mcore", "status": "ready",
-                                     "version": "0.4.0", "data_dir": str(DATA)})
+                                     "version": os.environ.get("MCORE_VERSION", "0.4.0"), "data_dir": str(DATA),
+                                     "model": os.environ.get("MCORE_MODEL", "qwen2.5-coder:7b"),
+                                     "ollama_url": os.environ.get("MCORE_OLLAMA_URL", "http://localhost:11434")})
         if parsed.path == "/rules":
             domain = parse_qs(parsed.query).get("domain", [None])[0]
             return _json(self, 200, {"rules": list_rules(domain)})
@@ -76,8 +78,8 @@ class Handler(BaseHTTPRequestHandler):
             retrieved = KNOWLEDGE.search(task, limit=data.get("knowledge_limit", 8))
             try:
                 client = OllamaClient(
-                    base_url=data.get("ollama_url", "http://localhost:11434"),
-                    model=data.get("model", "qwen2.5-coder:7b"),
+                    base_url=data.get("ollama_url") or os.environ.get("MCORE_OLLAMA_URL"),
+                    model=data.get("model") or os.environ.get("MCORE_MODEL"),
                     timeout=int(data.get("timeout", 240)),
                 )
                 response = EngineeringReasoner(client).reason(
@@ -113,9 +115,9 @@ class Handler(BaseHTTPRequestHandler):
                 "\\n\\nRETRIEVED KNOWLEDGE:\\n" + context + "\\n\\nUSER TASK:\\n" + prompt
             ) if context else prompt
             try:
-                model = data.get("model", "qwen2.5-coder:7b")
+                model = data.get("model") or os.environ.get("MCORE_MODEL")
                 result = OllamaClient(
-                    base_url=data.get("ollama_url", "http://localhost:11434"),
+                    base_url=data.get("ollama_url") or os.environ.get("MCORE_OLLAMA_URL"),
                     model=model, timeout=int(data.get("timeout", 180)),
                 ).generate_json(grounded)
                 return _json(self, 200, {
