@@ -117,7 +117,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 model = data.get("model") or os.environ.get("MCORE_MODEL")
                 result = OllamaClient(
-                    base_url=data.get("ollama_url", "http://localhost:11434"),
+                    base_url=data.get("ollama_url") or os.environ.get("MCORE_OLLAMA_URL"),
                     model=model, timeout=int(data.get("timeout", 180)),
                 ).generate_json(grounded)
                 return _json(self, 200, {
