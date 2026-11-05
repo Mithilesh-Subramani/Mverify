@@ -52,17 +52,16 @@ class MverifyDesktop(tk.Tk):
         self.progress.pack(fill="x",pady=6)
         self.tabs=ttk.Notebook(outer); self.tabs.pack(fill="both",expand=True)
         self.scan_tab=ttk.Frame(self.tabs,padding=8); self.spec_tab=ttk.Frame(self.tabs,padding=8)
-        self.intel_tab=ttk.Frame(self.tabs,padding=8); self.uvm_tab=ttk.Frame(self.tabs,padding=8); self.tests_tab=ttk.Frame(self.tabs,padding=8); self.mcore_tab=ttk.Frame(self.tabs,padding=8)
+        self.intel_tab=ttk.Frame(self.tabs,padding=8); self.uvm_tab=ttk.Frame(self.tabs,padding=8); self.tests_tab=ttk.Frame(self.tabs,padding=8)
         self.tabs.add(self.scan_tab,text="DUT Analysis")
         self.tabs.add(self.spec_tab,text="Specification")
         self.tabs.add(self.intel_tab,text="Verification Intelligence")
         self.tabs.add(self.uvm_tab,text="UVM Architecture")
         self.tabs.add(self.tests_tab,text="Test Cases")
-        self.tabs.add(self.mcore_tab,text="Mcore AI Core")
         self.scan_text=self._text_tab(self.scan_tab)
         self.spec_text=self._text_tab(self.spec_tab)
         self.intel_text=self._text_tab(self.intel_tab)
-        self._build_spec_controls(); self._build_intel_controls(); self._build_uvm_controls(); self._build_test_controls(); self._build_mcore_controls()
+        self._build_spec_controls(); self._build_intel_controls(); self._build_uvm_controls(); self._build_test_controls()
         log_frame=ttk.LabelFrame(outer,text="Activity",padding=5); log_frame.pack(fill="x",pady=(8,0))
         self.log=tk.Text(log_frame,height=5,wrap="word"); self.log.pack(fill="x")
         self.status=tk.StringVar(value="Ready")
@@ -208,8 +207,6 @@ class MverifyDesktop(tk.Tk):
     def _build_test_controls(self):
         bar=ttk.Frame(self.tests_tab); bar.pack(fill="x")
         ttk.Button(bar,text="Generate test cases",command=self._generate_testcases).pack(side="left")
-        ttk.Button(bar,text="Ask Mcore for suggestions",command=self._ask_mcore_suggestions).pack(side="left",padx=6)
-        ttk.Button(bar,text="Queue example for Mcore review",command=self._queue_mcore_example).pack(side="left")
         ttk.Label(self.tests_tab,text="Generated = deterministic structural cases. Suggested = heuristic/AI proposals. Review expected results before treating any case as functional verification.",wraplength=900).pack(anchor="w",pady=6)
         self.test_text=self._text_tab(self.tests_tab)
 
@@ -221,103 +218,13 @@ class MverifyDesktop(tk.Tk):
         self.tabs.select(self.tests_tab)
 
 
-    def _ask_mcore_suggestions(self):
-        if not self.report: messagebox.showwarning("Scan required","Scan the DUT project first."); return
-        import urllib.request
-        cases=getattr(self,"testcases",None) or generate_testcases(self.report,getattr(self,"mapped",[]))
-        evidence={"top":self.report.get("selected_top"),"summary":self.report.get("summary"),"modules":[{"name":m.get("name"),"ports":m.get("ports",[])} for m in self.report.get("module_details",[])],"hierarchy":self.report.get("hierarchy",[]),"test_cases":cases}
-        prompt=("Act as a senior RTL verification engineer. Suggest additional DUT-specific test scenarios from the supplied evidence. Do not invent protocol semantics, numeric limits, or expected results. Return JSON with key suggestions containing objects with name, rationale, stimulus, checks, required_specification, confidence, and limitations. Mark all items as proposals requiring engineer review. Evidence:\n"+json.dumps(evidence,indent=2))
-        url=self.mcore_url.get().rstrip("/")
-        def work():
-            payload=json.dumps({"prompt":prompt,"model":self.model_name.get().strip() or "qwen2.5-coder:7b"}).encode()
-            req=urllib.request.Request(url+"/reason",data=payload,headers={"Content-Type":"application/json"})
-            with urllib.request.urlopen(req,timeout=180) as r: return json.loads(r.read().decode())
-        def done(data):
-            self.mcore_suggestions=data.get("result",{}).get("suggestions",[])
-            cases.setdefault("suggested",[]).extend([{**x,"id":"MCORE-%03d"%(i+1),"kind":"suggested","source":"Mcore/Qwen","status":"needs_engineer_review","oracle":"not_available_until_requirement_review"} for i,x in enumerate(self.mcore_suggestions)])
-            self.testcases=cases; self._set_text(self.test_text,json.dumps(cases,indent=2)); self._log("Mcore returned %d additional suggested scenarios."%len(self.mcore_suggestions))
-        self._run_bg("Requesting Mcore suggestions…",work,done)
-
-    def _queue_mcore_example(self):
-        if not getattr(self,"testcases",None): messagebox.showwarning("No test cases","Generate test cases first."); return
-        import urllib.request
-        url=self.mcore_url.get().rstrip("/")
-        payload=json.dumps({"task_type":"verification_scenario_generation","source_project":self.report.get("project_dir") if self.report else None,"input":{"dut_top":self.report.get("selected_top") if self.report else None,"test_cases":self.testcases},"target":{"note":"Candidate scenario set; engineer review and simulation validation are still required."},"evidence":{"scan_summary":self.report.get("summary") if self.report else {},"requirements":getattr(self,"mapped",[])},"consent":False,"notes":"Queued from Mverify. Pending review; not eligible for training."}).encode()
-        def work():
-            req=urllib.request.Request(url+"/training/submit",data=payload,headers={"Content-Type":"application/json"})
-            with urllib.request.urlopen(req,timeout=15) as r:return json.loads(r.read().decode())
-        def done(data):
-            self._log("Mcore training candidate queued: %s (%s)."%(data.get("id"),data.get("status")))
-            messagebox.showinfo("Queued for review","Example saved to Mcore as pending review. It is not used for training.")
-        self._run_bg("Queueing Mcore example…",work,done)
-
-    def _build_mcore_controls(self):
-        frame=ttk.Frame(self.mcore_tab); frame.pack(fill="x")
-        ttk.Label(frame,text="Mcore local API").grid(row=0,column=0,sticky="w")
-        self.mcore_url=tk.StringVar(value="http://127.0.0.1:8765")
-        ttk.Entry(frame,textvariable=self.mcore_url,width=38).grid(row=0,column=1,padx=6)
-        ttk.Button(frame,text="Check Mcore",command=self._check_mcore).grid(row=0,column=2)
-        ttk.Label(self.mcore_tab,text="Mcore is a separate local service. It can use Qwen through Ollama for retrieval-grounded reasoning. Training examples remain pending review until explicitly approved.",wraplength=900).pack(anchor="w",pady=8)
-        actions=ttk.Frame(self.mcore_tab); actions.pack(fill="x",pady=4)
-        ttk.Button(actions,text="Refresh training queue",command=self._refresh_mcore_queue).pack(side="left")
-        self.training_id=tk.StringVar()
-        ttk.Label(actions,text="Example ID").pack(side="left",padx=(10,3))
-        ttk.Entry(actions,textvariable=self.training_id,width=38).pack(side="left")
-        self.training_consent=tk.BooleanVar(value=False)
-        ttk.Checkbutton(actions,text="I approve data use for training",variable=self.training_consent).pack(side="left",padx=6)
-        ttk.Button(actions,text="Approve selected",command=self._approve_mcore_example).pack(side="left")
-        ttk.Button(actions,text="Reject selected",command=self._reject_mcore_example).pack(side="left",padx=4)
-        self.mcore_text=self._text_tab(self.mcore_tab)
-
-    def _check_mcore(self):
-        import urllib.request
-        url=self.mcore_url.get().rstrip("/")+"/health"
-        def work():
-            with urllib.request.urlopen(url,timeout=5) as r: return json.loads(r.read().decode())
-        def done(data):
-            self._set_text(self.mcore_text,json.dumps(data,indent=2)); self._log("Mcore API connection successful.")
-        self._run_bg("Checking Mcore…",work,done)
 
 
-    def _mcore_request(self,path,payload=None):
-        import urllib.request
-        url=self.mcore_url.get().rstrip("/") + path
-        if payload is None:
-            req=urllib.request.Request(url)
-        else:
-            req=urllib.request.Request(url,data=json.dumps(payload).encode(),headers={"Content-Type":"application/json"})
-        with urllib.request.urlopen(req,timeout=30) as r:
-            return json.loads(r.read().decode())
 
-    def _refresh_mcore_queue(self):
-        def work(): return self._mcore_request("/training/examples")
-        def done(data):
-            examples=data.get("examples",[])
-            self._set_text(self.mcore_text,json.dumps(data,indent=2))
-            self._log("Mcore training queue: %d examples."%len(examples))
-        self._run_bg("Loading Mcore training queue…",work,done)
 
-    def _approve_mcore_example(self):
-        eid=self.training_id.get().strip()
-        if not eid:
-            messagebox.showwarning("Example ID required","Select or enter an example ID from the training queue."); return
-        if not self.training_consent.get():
-            messagebox.showwarning("Consent required","Confirm that this data is permitted for model training."); return
-        def work(): return self._mcore_request("/training/approve",{"id":eid,"consent":True})
-        def done(data):
-            self._log("Mcore example approved for training dataset: "+eid)
-            self._refresh_mcore_queue()
-        self._run_bg("Approving Mcore example…",work,done)
 
-    def _reject_mcore_example(self):
-        eid=self.training_id.get().strip()
-        if not eid:
-            messagebox.showwarning("Example ID required","Enter an example ID from the training queue."); return
-        def work(): return self._mcore_request("/training/reject",{"id":eid,"reason":"Rejected by engineer in Mverify."})
-        def done(data):
-            self._log("Mcore example rejected: "+eid)
-            self._refresh_mcore_queue()
-        self._run_bg("Rejecting Mcore example…",work,done)
+
+
 
     def _refresh_top_options(self):
         if self.report and self.report.get("selected_top"): self.top_var.set(self.report["selected_top"])

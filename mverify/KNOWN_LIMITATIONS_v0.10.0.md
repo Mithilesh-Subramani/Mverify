@@ -6,5 +6,3 @@
 4. Generated UVM remains a structural smoke scaffold. Its scoreboard records observations and unknown-value samples. It is not an independent functional reference model for arbitrary DUTs.
 5. No protocol-specific legal PCIe transaction model is generated automatically. The engineer must provide or approve interface semantics and expected results.
 6. VCS and Verdi were not available in the build environment. Generated SystemVerilog was not compiled or simulated here.
-7. Mcore retrieval is lexical. Qwen output is advisory and can be incorrect.
-8. Training examples require engineer review and explicit consent. JSONL export is available. Fine-tuning is an optional starter script and has not been run or evaluated in this build.

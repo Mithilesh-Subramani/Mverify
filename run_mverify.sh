@@ -7,5 +7,5 @@ if [[ -x "$ROOT/.venv/bin/python" ]]; then
 else
   PY="${PYTHON:-python3.11}"
 fi
-export PYTHONPATH="$ROOT/Mverify:$ROOT/Mcore${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$ROOT/Mverify${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" desktop_app.py
