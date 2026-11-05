@@ -214,8 +214,8 @@ if report:
             st.caption("This analysis uses the current DUT scan and approved requirement-to-RTL evidence. It does not generate a fixed plan when inputs are missing.")
             spec_revision = st.text_input("Applicable PCIe specification revision", key="plan_spec_revision", placeholder="Example: PCI Express Base Specification Revision 4.0")
             use_ollama = st.checkbox("Use local Ollama for design reasoning", value=True, help="Ollama must be running locally. RTL and specification content are not sent to a cloud service.")
-            ollama_model = st.text_input("Ollama model", value="qwen2.5-coder:7b", key="intel_ollama_model")
-            ollama_url = st.text_input("Ollama URL", value="http://localhost:11434", key="intel_ollama_url")
+            ollama_model = st.text_input("Ollama model", value="qwen3-coder:30b", key="intel_ollama_model")
+            ollama_url = st.text_input("Ollama URL", value="http://127.0.0.1:11434", key="intel_ollama_url")
             if st.button("Analyze this DUT and design its verification strategy", type="primary"):
                 with st.spinner("Building DUT model, tracing evidence, and evaluating architecture options..."):
                     enriched = []

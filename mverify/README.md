@@ -70,3 +70,23 @@ This release is a conservative planning improvement. It does not yet implement a
 
 ## v0.8.1 Desktop application
 Run `python desktop_app.py` for the native Tkinter desktop window. Streamlit is no longer required. See `README_DESKTOP.md` for RHEL setup and Tkinter checks.
+
+
+## Local AI + project-scoped RAG (initial foundation)
+
+A separate Streamlit page is available at **Local AI RAG** after starting Mverify. It uses Ollama for local chat and embeddings, and a local Qdrant database for project-scoped retrieval.
+
+Install dependencies and models:
+
+```bash
+python -m pip install -r requirements.txt
+ollama pull qwen3-coder:30b
+ollama pull nomic-embed-text
+python -m streamlit run app.py
+```
+
+Open the **Local AI RAG** page, enter the RTL/specification directory, and select **Index / refresh this project**. Then ask a question about the DUT. The response displays retrieved source paths and line ranges. Initial retrieval supports Verilog/SystemVerilog, TXT, Markdown, RST, CSV, PDF and DOCX files. PDF and DOCX ingestion uses the existing optional extraction dependencies.
+
+Set `OLLAMA_BASE_URL`, `OLLAMA_CHAT_MODEL`, `OLLAMA_EMBED_MODEL`, `OLLAMA_NUM_CTX`, and `OLLAMA_TIMEOUT` to configure the local model service. The RAG page also exposes model and Qdrant path settings. Each project path maps to a separate Qdrant collection.
+
+This is the first integration milestone. It does not yet implement incremental file-level re-indexing, parser-backed symbol retrieval, tenant authentication, fine-tuning, or VCS/Questa execution orchestration. Review `docs/LOCAL_AI_RAG_ARCHITECTURE.md` and `docs/LOCAL_AI_TRAINING_DATA_POLICY.md`.
