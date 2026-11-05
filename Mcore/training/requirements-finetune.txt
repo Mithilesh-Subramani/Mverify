@@ -1,1 +1,0 @@
-torch>=2.2\ntransformers>=4.45\ndatasets>=3\npeft>=0.13\ntrl>=0.12\nbitsandbytes>=0.44\naccelerate>=1\n
