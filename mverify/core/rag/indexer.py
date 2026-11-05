@@ -12,7 +12,7 @@ from qdrant_client.http import models
 
 from mverify.core.ai.ollama_client import OllamaClient
 
-TEXT_SUFFIXES = {".v", ".vh", ".sv", ".svh", ".txt", ".md", ".rst", ".csv"}
+TEXT_SUFFIXES = {".v", ".vh", ".sv", ".svh", ".txt", ".md", ".rst", ".csv", ".pdf", ".docx"}
 SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "build", "dist"}
 
 
@@ -66,7 +66,7 @@ class ProjectIndexer:
         chunks = []
         for path in _iter_sources(root):
             try:
-                text = path.read_text(encoding="utf-8", errors="replace")
+                if path.suffix.lower() in {".pdf", ".docx"}:\n                from mverify.core.spec_engine import extract_spec_text\n                text = extract_spec_text(path)\n            else:\n                text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             chunks.extend(_chunks(path, root, text))
