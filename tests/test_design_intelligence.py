@@ -34,9 +34,9 @@ def test_model_groups_actual_ports_and_state_evidence():
 def test_architecture_options_are_dut_specific_and_include_passive_fallback():
     model=build_dut_model(sample_report())
     options=propose_architectures(model)
-    assert {x['id'] for x in options} >= {'layered','single_virtual','passive'}
+    assert options[0]['id'] in {'layered', 'coordinated_layered', 'passive_observation'}
     layered=next(x for x in options if x['id']=='layered')
-    assert any(a['name']=='request_interface_agent' for a in layered['agents'])
+    assert any(a['name']=='request_stream_agent' for a in layered['components'])
 
 
 def test_intelligence_changes_with_actual_interface_evidence():
@@ -45,4 +45,27 @@ def test_intelligence_changes_with_actual_interface_evidence():
     result=generate_intelligence(model,options,[],False)
     assert result['evidence_snapshot']['dut']=='pcie_top'
     assert result['dut_specific_findings']
-    assert result['architecture_recommendation']['id'] in {'layered','passive'}
+    assert result['architecture_recommendation']['id'] in {x['id'] for x in options}
+
+
+def test_simple_alu_gets_compact_architecture_not_pcie_layered_agents():
+    report = {
+        'selected_top': 'alu', 'top_candidates': ['alu'],
+        'module_details': [{'name': 'alu', 'ports': [
+            {'name': 'operand_a', 'direction': 'input', 'width': 32},
+            {'name': 'operand_b', 'direction': 'input', 'width': 32},
+            {'name': 'opcode', 'direction': 'input', 'width': 4},
+            {'name': 'result', 'direction': 'output', 'width': 32},
+            {'name': 'zero_flag', 'direction': 'output', 'width': 1},
+        ]}],
+        'hierarchy': [],
+        'feature_analysis': {'features': []},
+        'semantic_analysis': {'modules': [{'module': 'alu', 'procedural_block_count': 0,
+            'state_machine_candidates': [], 'write_candidates': [], 'continuous_assignments': []}]},
+    }
+    model = build_dut_model(report)
+    options = propose_architectures(model)
+    assert len(options) == 1
+    assert options[0]['id'] == 'combinational_unit'
+    assert 'virtual_sequencer' not in str(options[0])
+    assert any(c['name'] == 'directed_driver' for c in options[0]['components'])

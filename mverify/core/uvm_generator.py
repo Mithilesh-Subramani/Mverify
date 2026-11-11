@@ -70,233 +70,340 @@ def order_rtl_sources(files):
     ordered.extend(x for x in paths if x not in package_paths)
     return ordered, sorted(package_defs.keys())
 
-def generate_uvm_project(scan_report, output_dir, top_module=None, architecture=None):
-    modules=scan_report.get("module_details",[])
-    top=top_module or scan_report.get("selected_top")
+
+def generate_uvm_project(scan_report, output_dir, top_module=None, architecture=None,
+                         requirements=None, observation_cycles=20):
+    """Generate a passive, compile-oriented UVM environment plus reviewed test stubs.
+
+    No DUT input is driven automatically. Port-name heuristics are not a safe
+    substitute for a protocol mapping. The generated topology and monitors are
+    real; active sequences are explicit templates pending engineer approval.
+    """
+    modules = scan_report.get("module_details", [])
+    top = top_module or scan_report.get("selected_top")
     if not top:
-        c=scan_report.get("top_candidates",[])
-        if len(c)==1: top=c[0]
-    dut=next((m for m in modules if m.get("name")==top),None)
-    if not dut: raise ValueError("Select a valid DUT top module before UVM generation.")
-    ports=dut.get("ports",[])
-    if not ports: raise ValueError("No DUT ports were parsed. Generation stopped to avoid inventing an interface.")
-    out=Path(output_dir).expanduser().resolve()
-    for d in ("interfaces","agents","env","sequences","tests"): (out/d).mkdir(parents=True,exist_ok=True)
-    groups={}
-    for p in ports: groups.setdefault(group_for(p),[]).append(p)
-    interfaces=[]
-    for g, plist in sorted(groups.items()):
-        iname="mverify_"+safe(g)+"_if"
-        lines=["interface %s(input logic clk);"%iname]
-        for p in plist:
-            if p["name"].lower() not in ("clk", "clock"):
-                lines.append("  %s %s;"%(sv_type(p),p["name"]))
-        lines += ["  // DUT port directions: "+", ".join("%s=%s"%(p["name"],p.get("direction")) for p in plist),"endinterface"]
-        (out/"interfaces"/(iname+".sv")).write_text("\n".join(lines)+"\n")
-        interfaces.append("interfaces/"+iname+".sv")
-    (out/"mverify_items.sv").write_text(
-        "class mverify_transaction extends uvm_sequence_item;\n"
-        "  `uvm_object_utils(mverify_transaction)\n"
-        "  rand bit [31:0] data;\n"
-        "  int unsigned sample_cycle;\n"
-        "  function new(string name=\"mverify_transaction\"); super.new(name); endfunction\n"
-        "endclass\n"
-        "class mverify_smoke_sequence extends uvm_sequence #(mverify_transaction);\n"
-        "  `uvm_object_utils(mverify_smoke_sequence)\n"
-        "  int unsigned item_count=16;\n"
-        "  function new(string name=\"mverify_smoke_sequence\"); super.new(name); endfunction\n"
-        "  task body(); mverify_transaction tr; repeat(item_count) begin\n"
-        "    tr=mverify_transaction::type_id::create(\"tr\");\n"
-        "    start_item(tr); if(!tr.randomize()) `uvm_fatal(\"RAND\",\"Smoke item randomization failed\"); finish_item(tr);\n"
-        "  end endtask\n"
-        "endclass\n")
-    agent_names=[]
-    pkg=["package mverify_uvm_pkg;","  import uvm_pkg::*;","  `include \"uvm_macros.svh\"",
-         "  `include \"mverify_items.sv\""]
-    for g in sorted(groups): pkg.append('  `include "agents/%s_agent.sv"'%safe(g))
-    pkg += ['  `include "env/mverify_scoreboard.sv"','  `include "env/mverify_env.sv"',
-            '  `include "tests/mverify_base_test.sv"',"endpackage"]
-    (out/"mverify_uvm_pkg.sv").write_text("\n".join(pkg)+"\n")
-    for g, plist in sorted(groups.items()):
-        gn=safe(g); a="mverify_"+gn+"_agent"; agent_names.append(a)
-        vif="mverify_%s_if"%gn
-        # Generate bounded structural smoke stimulus only for non-reset DUT inputs.
-        # This is not labelled as protocol-legal traffic without an approved model.
-        drive_ports=[p for p in plist if p.get("direction")=="input" and p.get("name") not in ("clk","clock") and p.get("name"," ").lower() not in ("rst","rst_n","reset","reset_n","aresetn","areset")]
-        active=bool(drive_ports)
-        prefix="mverify_"+gn
-        drive_stmt=(" ".join("vif.%s <= tr.data;"%x["name"] for x in drive_ports)) if drive_ports else "/* no non-reset input on this interface */"
-        output_ports=[p for p in plist if p.get("direction")=="output"]
-        sample_stmt=("tr.data = vif.%s;"%output_ports[0]["name"]) if output_ports else "tr.data = '0;"
-        lines=[
-          "class %s_sequencer extends uvm_sequencer #(mverify_transaction);"%prefix,
-          "  `uvm_component_utils(%s_sequencer)"%prefix,
-          '  function new(string name="%s_sequencer", uvm_component parent=null); super.new(name,parent); endfunction'%prefix,
-          "endclass",
-          "class %s_driver extends uvm_driver #(mverify_transaction);"%prefix,
-          "  `uvm_component_utils(%s_driver)"%prefix,
-          "  virtual %s vif;"%vif,
-          '  function new(string name="%s_driver", uvm_component parent=null); super.new(name,parent); endfunction'%prefix,
-          "  function void build_phase(uvm_phase phase); super.build_phase(phase);",
-          '    if (!uvm_config_db#(virtual %s)::get(this, "", "vif", vif)) `uvm_fatal("NOVIF", "Virtual interface not configured")'%vif,
-          "  endfunction",
-          "  task run_phase(uvm_phase phase); mverify_transaction tr; forever begin",
-          "    seq_item_port.get_next_item(tr);",
-          "    @(negedge vif.clk); %s"%drive_stmt,
-          "    @(posedge vif.clk); seq_item_port.item_done();",
-          "  end endtask",
-          "endclass",
-          "class %s_monitor extends uvm_monitor;"%prefix,
-          "  `uvm_component_utils(%s_monitor)"%prefix,
-          "  virtual %s vif;"%vif,
-          "  uvm_analysis_port #(mverify_transaction) ap;",
-          '  function new(string name="%s_monitor", uvm_component parent=null); super.new(name,parent); endfunction'%prefix,
-          "  function void build_phase(uvm_phase phase); super.build_phase(phase); ap=new(\"ap\",this);",
-          '    if (!uvm_config_db#(virtual %s)::get(this, "", "vif", vif)) `uvm_fatal("NOVIF", "Virtual interface not configured")'%vif,
-          "  endfunction",
-          "  int unsigned cycle_count=0;",
-          "  task run_phase(uvm_phase phase); mverify_transaction tr; forever begin @(posedge vif.clk); cycle_count++;",
-          "    tr=mverify_transaction::type_id::create(\"observed\"); tr.sample_cycle=cycle_count; %s ap.write(tr);"%sample_stmt,
-          "  end endtask",
-          "endclass",
-          "class %s extends uvm_agent;"%a,
-          "  `uvm_component_utils(%s)"%a,
-          "  %s_monitor monitor;"%prefix,
-          "  uvm_analysis_port #(mverify_transaction) ap;",
-        ]
-        if active:
-            lines += ["  %s_sequencer sequencer;"%prefix,"  %s_driver driver;"%prefix]
-        lines += [
-          '  function new(string name="%s", uvm_component parent=null); super.new(name,parent); endfunction'%a,
-          "  function void build_phase(uvm_phase phase); super.build_phase(phase);",
-          '    monitor=%s_monitor::type_id::create("monitor",this);'%prefix]
-        if active:
-            lines += ['    sequencer=%s_sequencer::type_id::create("sequencer",this);'%prefix,
-                      '    driver=%s_driver::type_id::create("driver",this);'%prefix]
-        lines += ["    ap=new(\"ap\",this);","  endfunction",
-                  "  function void connect_phase(uvm_phase phase); super.connect_phase(phase);"]
-        if active: lines += ["    driver.seq_item_port.connect(sequencer.seq_item_export);"]
-        lines += ["    monitor.ap.connect(ap);","  endfunction","endclass"]
-        (out/"agents"/(gn+"_agent.sv")).write_text("\n".join(lines)+"\n")
-    (out/"env/mverify_scoreboard.sv").write_text(
-        "class mverify_scoreboard extends uvm_component;\n"
-        "  `uvm_component_utils(mverify_scoreboard)\n"
-        "  uvm_analysis_imp #(mverify_transaction,mverify_scoreboard) observed_export;\n"
-        "  int unsigned observed_count=0; int unsigned unknown_sample_count=0;\n"
-        "  int unsigned functional_checks=0; int unsigned functional_errors=0;\n"
-        "  function new(string name=\"mverify_scoreboard\", uvm_component parent=null); super.new(name,parent); endfunction\n"
-        "  function void build_phase(uvm_phase phase); super.build_phase(phase); observed_export=new(\"observed_export\",this); endfunction\n"
-        "  function void write(mverify_transaction tr); observed_count++;\n"
-        "    if ($isunknown(tr.data)) begin unknown_sample_count++; `uvm_error(\"MVERIFY_X\",$sformatf(\"Unknown observed output at cycle %0d\",tr.sample_cycle)); end\n"
-        "    // Functional comparisons are enabled only when a requirement-derived reference model is attached.\n"
-        "  endfunction\n"
-        "  function void report_phase(uvm_phase phase); super.report_phase(phase);\n"
-        "    `uvm_info(\"MVERIFY_SCOREBOARD\",$sformatf(\"observed=%0d unknown_samples=%0d functional_checks=%0d functional_errors=%0d\",observed_count,unknown_sample_count,functional_checks,functional_errors),UVM_LOW)\n"
-        "    if(observed_count==0) `uvm_warning(\"MVERIFY_NO_OBS\",\"No monitor observations were received\");\n"
-        "  endfunction\n"
-        "endclass\n")
-    env=["class mverify_env extends uvm_env;","  `uvm_component_utils(mverify_env)",
-         "  mverify_scoreboard scoreboard;"]
-    names=[]
-    for a in agent_names:
-        n=a.replace("mverify_","").replace("_agent","_agt"); names.append((a,n)); env.append("  %s %s;"%(a,n))
-    env += ['  function new(string name="mverify_env", uvm_component parent=null); super.new(name,parent); endfunction',
-            "  function void build_phase(uvm_phase phase); super.build_phase(phase);",
-            '    scoreboard = mverify_scoreboard::type_id::create("scoreboard", this);']
-    for a,n in names: env.append('    %s = %s::type_id::create("%s", this);'%(n,a,n))
-    env += ["  endfunction","  function void connect_phase(uvm_phase phase); super.connect_phase(phase);"]
-    for a,n in names: env.append("    %s.monitor.ap.connect(scoreboard.observed_export);"%n)
-    env += ["  endfunction","endclass"]
-    (out/"env/mverify_env.sv").write_text("\n".join(env)+"\n")
-    base_lines=[
-        'class mverify_base_test extends uvm_test;',
-        '  `uvm_component_utils(mverify_base_test)',
-        '  mverify_env env;',
-        '  function new(string name="mverify_base_test", uvm_component parent=null); super.new(name,parent); endfunction',
-        '  function void build_phase(uvm_phase phase); super.build_phase(phase); env=mverify_env::type_id::create("env",this); endfunction',
-        '  task run_phase(uvm_phase phase); phase.raise_objection(this);',
-        '    `uvm_info("MVERIFY_SMOKE", "Running bounded structural input activity and output observation. This is not protocol-functional verification.", UVM_LOW)',
+        candidates = scan_report.get("top_candidates", [])
+        if len(candidates) == 1:
+            top = candidates[0]
+    dut = next((m for m in modules if m.get("name") == top), None)
+    if not dut:
+        raise ValueError("Select a valid DUT top module before UVM generation.")
+    ports = dut.get("ports", [])
+    if not ports:
+        raise ValueError("No DUT ports were parsed. Generation stopped.")
+
+    out = Path(output_dir).expanduser().resolve()
+    for folder in ("interfaces", "agents", "env", "sequences", "tests", "scripts"):
+        (out/folder).mkdir(parents=True, exist_ok=True)
+
+    def ident(value):
+        return safe(value) or "unnamed"
+
+    # One DUT interface avoids speculative signal grouping and cross-interface
+    # connection errors. All parsed top-level ports are connected exactly once.
+    if_name = "mverify_dut_if"
+    interface_lines = [f"interface {if_name}(input logic clk);"]
+    type_packages = sorted({pkg for port in ports
+                            for pkg in re.findall(r"\b([A-Za-z_]\w*)\s*::", port.get("declaration", ""))})
+    for package_name in type_packages:
+        interface_lines.append(f"  import {package_name}::*;")
+    for port in ports:
+        name = port.get("name", "")
+        if not name or name.lower() in ("clk", "clock"):
+            continue
+        width = port.get("width", "scalar/unspecified")
+        decl = sv_type(port)
+        if not decl or decl == "logic":
+            decl = "logic"
+        interface_lines.append(f"  {decl} {name};")
+    interface_lines += ["endinterface", ""]
+    (out/"interfaces"/(if_name+".sv")).write_text("\n".join(interface_lines))
+
+    # Preserve typed per-port observations in the transaction.
+    item = [
+        "class mverify_observation extends uvm_sequence_item;",
+        "  `uvm_object_utils(mverify_observation)",
+        "  int unsigned sample_cycle;"
     ]
-    for a,n in names:
-        group=a.replace("mverify_","").replace("_agent","")
-        if any(p.get("direction")=="input" and p.get("name") not in ("clk","clock") and p.get("name"," ").lower() not in ("rst","rst_n","reset","reset_n","aresetn","areset") for p in groups.get(group,[])):
-            base_lines.append('    begin mverify_smoke_sequence seq; seq=mverify_smoke_sequence::type_id::create("seq_%s"); seq.start(env.%s_agt.sequencer); end'%(group,group))
-    base_lines += ['    #20; phase.drop_objection(this);','  endtask','endclass']
-    (out/"tests/mverify_base_test.sv").write_text("\n".join(base_lines)+"\n")
-    top_lines=["module mverify_tb_top;","  import uvm_pkg::*;","  import mverify_uvm_pkg::*;",
-               "  bit clk=0; always #5 clk=~clk;"]
-    for g in sorted(groups): top_lines.append("  mverify_%s_if %s(clk);"%(safe(g),safe(g)+"_vif"))
-    top_lines.append("  %s u_dut ("%top)
-    connections=[]
     for port in ports:
-        pn=port["name"]
-        if pn.lower() in ("clk", "clock"): expr="clk"
-        else:
-            g=safe(group_for(port))
-            expr="%s_vif.%s"%(g,pn)
-        connections.append("    .%s(%s)"%(pn,expr))
-    top_lines.append(",\n".join(connections))
-    top_lines += ["  );","  initial begin"]
+        name = port.get("name", "")
+        if not name or name.lower() in ("clk", "clock"):
+            continue
+        item_type = sv_type(port) or "logic"
+        item.append(f"  {item_type} {name};")
+    item += [
+        '  function new(string name="mverify_observation"); super.new(name); endfunction',
+        "endclass", ""
+    ]
+    (out/"mverify_items.sv").write_text("\n".join(item))
+
+    # Passive monitor samples every DUT output. Inputs are sampled as context.
+    sample_assignments = []
     for port in ports:
-        pn=port.get("name","")
-        low=pn.lower()
-        if port.get("direction")=="input" and (low in ("rst","rst_n","reset","reset_n","aresetn","areset") or low.endswith("_reset") or low.endswith("_rst_n")):
-            g=safe(group_for(port)); vif=safe(g)+"_vif"
-            active_level="1'b0" if low.endswith("_n") or low=="aresetn" else "1'b1"
-            inactive_level="1'b1" if active_level=="1'b0" else "1'b0"
-            top_lines.append("    %s.%s = %s;"%(vif,pn,active_level))
-            top_lines.append("    repeat (5) @(posedge clk);")
-            top_lines.append("    %s.%s = %s;"%(vif,pn,inactive_level))
-    for g in sorted(groups):
-        vif="mverify_%s_if"%safe(g)
-        path="uvm_test_top.env.%s_agt.*"%safe(g)
-        top_lines.append('    uvm_config_db#(virtual %s)::set(null, "%s", "vif", %s_vif);'%(vif,path,safe(g)))
-    top_lines += ['    run_test("mverify_base_test");',"  end","endmodule"]
-    (out/"mverify_tb_top.sv").write_text("\n".join(top_lines)+"\n")
-    testcase_catalog=generate_testcases(scan_report)
-    (out/"verification_testcases.json").write_text(json.dumps(testcase_catalog,indent=2))
-    manifest={"dut_top":top,"dut_ports":ports,"interface_groups":groups,
-              "hierarchy":scan_report.get("hierarchy",[]),"rtl_files":scan_report.get("files",[]),
-              "generated_at":datetime.now(timezone.utc).isoformat(),
-              "generation_mode":"structural_smoke_with_observation",
-              "limitations":["This output is a compile/topology scaffold, not a functional PCIe testbench.",
-                             "Bounded structural input activity is generated for non-reset inputs; it is not protocol-legal stimulus.",
-                             "Monitors sample one representative output per interface group; functional scoreboarding requires an approved reference model.",
-                             "Review declarations against source package typedefs.",
-               "Protocol-specific transaction decoding, independent reference models, assertions and functional coverage require approved interface semantics.",
-               "No simulator compile or execution was performed."]}
-    (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
-    ordered_rtl, discovered_packages = order_rtl_sources(manifest["rtl_files"])
-    manifest["rtl_package_order"] = discovered_packages
-    manifest["rtl_compile_order"] = ordered_rtl
-    (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
-    flist=["+incdir+.", "+incdir+interfaces", "+incdir+agents", "+incdir+env", "+incdir+tests"]
-    flist += ordered_rtl+interfaces+["mverify_uvm_pkg.sv","mverify_tb_top.sv"]
+        name = port.get("name", "")
+        if name and name.lower() not in ("clk", "clock"):
+            sample_assignments.append(f"      tr.{name} = vif.{name};")
+    monitor = [
+        "class mverify_monitor extends uvm_monitor;",
+        "  `uvm_component_utils(mverify_monitor)",
+        f"  virtual {if_name} vif;",
+        "  uvm_analysis_port #(mverify_observation) ap;",
+        "  int unsigned cycle_count=0;",
+        '  function new(string name="mverify_monitor", uvm_component parent=null); super.new(name,parent); endfunction',
+        "  function void build_phase(uvm_phase phase);",
+        "    super.build_phase(phase); ap=new(\"ap\",this);",
+        f'    if (!uvm_config_db#(virtual {if_name})::get(this, "", "vif", vif))',
+        '      `uvm_fatal("NOVIF", "mverify_dut_if was not configured")',
+        "  endfunction",
+        "  task run_phase(uvm_phase phase);",
+        "    mverify_observation tr;",
+        "    forever begin",
+        "      @(posedge vif.clk); cycle_count++;",
+        '      tr=mverify_observation::type_id::create("observation");',
+        "      tr.sample_cycle=cycle_count;"
+    ] + sample_assignments + [
+        "      ap.write(tr);",
+        "    end",
+        "  endtask",
+        "endclass", ""
+    ]
+    (out/"agents/mverify_monitor.sv").write_text("\n".join(monitor))
+
+    scoreboard = [
+        "class mverify_scoreboard extends uvm_component;",
+        "  `uvm_component_utils(mverify_scoreboard)",
+        "  uvm_analysis_imp #(mverify_observation,mverify_scoreboard) observed_export;",
+        "  int unsigned observed_count=0;",
+        '  function new(string name="mverify_scoreboard", uvm_component parent=null); super.new(name,parent); endfunction',
+        '  function void build_phase(uvm_phase phase); super.build_phase(phase); observed_export=new("observed_export",this); endfunction',
+        "  function void write(mverify_observation tr);",
+        "    observed_count++;",
+        '    `uvm_info("MVERIFY_OBS",$sformatf("cycle=%0d observation=%0d",tr.sample_cycle,observed_count),UVM_HIGH)',
+        "  endfunction",
+        "  function void report_phase(uvm_phase phase);",
+        "    super.report_phase(phase);",
+        '    `uvm_info("MVERIFY_SCOREBOARD",$sformatf("Observed samples: %0d",observed_count),UVM_LOW)',
+        '    if (observed_count==0) `uvm_warning("MVERIFY_NO_OBS","No DUT observations were captured")',
+        "  endfunction",
+        "endclass", ""
+    ]
+    (out/"env/mverify_scoreboard.sv").write_text("\n".join(scoreboard))
+
+    agent = [
+        "class mverify_agent extends uvm_agent;",
+        "  `uvm_component_utils(mverify_agent)",
+        "  mverify_monitor monitor;",
+        "  uvm_analysis_port #(mverify_observation) ap;",
+        '  function new(string name="mverify_agent", uvm_component parent=null); super.new(name,parent); endfunction',
+        "  function void build_phase(uvm_phase phase);",
+        '    super.build_phase(phase); monitor=mverify_monitor::type_id::create("monitor",this); ap=new("ap",this);',
+        "  endfunction",
+        "  function void connect_phase(uvm_phase phase); super.connect_phase(phase); monitor.ap.connect(ap); endfunction",
+        "endclass", ""
+    ]
+    (out/"agents/mverify_agent.sv").write_text("\n".join(agent))
+
+    env = [
+        "class mverify_env extends uvm_env;",
+        "  `uvm_component_utils(mverify_env)",
+        "  mverify_agent dut_agent;",
+        "  mverify_scoreboard scoreboard;",
+        '  function new(string name="mverify_env", uvm_component parent=null); super.new(name,parent); endfunction',
+        "  function void build_phase(uvm_phase phase);",
+        '    super.build_phase(phase); dut_agent=mverify_agent::type_id::create("dut_agent",this);',
+        '    scoreboard=mverify_scoreboard::type_id::create("scoreboard",this);',
+        "  endfunction",
+        "  function void connect_phase(uvm_phase phase);",
+        "    super.connect_phase(phase); dut_agent.ap.connect(scoreboard.observed_export);",
+        "  endfunction",
+        "endclass", ""
+    ]
+    (out/"env/mverify_env.sv").write_text("\n".join(env))
+
+    # Scenario descriptions are emitted as selectable UVM test classes. They
+    # observe the DUT only; stimulus is intentionally not guessed.
+    catalog = generate_testcases(scan_report, requirements=requirements or [])
+    test_names = []
+    test_lines = [
+        "class mverify_base_test extends uvm_test;",
+        "  `uvm_component_utils(mverify_base_test)",
+        "  mverify_env env;",
+        '  function new(string name="mverify_base_test", uvm_component parent=null); super.new(name,parent); endfunction',
+        "  function void build_phase(uvm_phase phase);",
+        '    super.build_phase(phase); env=mverify_env::type_id::create("env",this);',
+        "  endfunction",
+        "  function void end_of_elaboration_phase(uvm_phase phase);",
+        "    super.end_of_elaboration_phase(phase);",
+        '    `uvm_info("MVERIFY_TOPOLOGY","Printing UVM component topology",UVM_LOW)',
+        "    uvm_top.print_topology();",
+        "  endfunction",
+        "  task run_phase(uvm_phase phase);",
+        "    phase.raise_objection(this);",
+        '    `uvm_info("MVERIFY_BASE","Passive DUT observation test. No unapproved input stimulus is applied.",UVM_LOW)',
+        f"    repeat ({max(1, int(observation_cycles))}) @(posedge env.dut_agent.monitor.vif.clk);",
+        "    phase.drop_objection(this);",
+        "  endtask",
+        "endclass", ""
+    ]
+    base_start = next(i for i, line in enumerate(test_lines) if line.startswith("class mverify_base_test"))
+    base_end = test_lines.index("endclass", base_start) + 1
+    base_source = "\n".join(test_lines[:base_end]) + "\n"
+    (out/"tests/mverify_base_test.sv").write_text(base_source)
+    scenario_lines = []
+    for case in catalog.get("generated", []) + catalog.get("suggested", []):
+        cname = "mverify_" + ident(case.get("id", "case")).lower() + "_test"
+        test_names.append({"id": case.get("id"), "name": case.get("name"),
+                           "uvm_test": cname, "kind": case.get("kind"),
+                           "oracle": case.get("oracle")})
+        scenario_lines += [
+            f"class {cname} extends mverify_base_test;",
+            f"  `uvm_component_utils({cname})",
+            f'  function new(string name="{cname}", uvm_component parent=null); super.new(name,parent); endfunction',
+            "  function void end_of_elaboration_phase(uvm_phase phase);",
+            "    super.end_of_elaboration_phase(phase);",
+            f'    `uvm_info("MVERIFY_CASE","Scenario: {case.get("name","").replace(chr(34), chr(39))}",UVM_LOW)',
+            '    `uvm_warning("MVERIFY_REVIEW","This case is an observation/scenario stub. Add approved stimulus and an independent expected-result model before claiming functional verification.")',
+            "  endfunction",
+            "endclass", ""
+        ]
+    (out/"tests/mverify_tests.sv").write_text("\n".join(scenario_lines) + "\n")
+
+    pkg = [
+        "package mverify_uvm_pkg;",
+        "  import uvm_pkg::*;",
+        *[f"  import {package_name}::*;" for package_name in type_packages],
+        '  `include "uvm_macros.svh"',
+        '  `include "mverify_items.sv"',
+        '  `include "agents/mverify_monitor.sv"',
+        '  `include "agents/mverify_agent.sv"',
+        '  `include "env/mverify_scoreboard.sv"',
+        '  `include "env/mverify_env.sv"',
+        '  `include "tests/mverify_base_test.sv"',
+        '  `include "tests/mverify_tests.sv"',
+        "endpackage", ""
+    ]
+    (out/"mverify_uvm_pkg.sv").write_text("\n".join(pkg))
+
+    top_lines = [
+        "module mverify_tb_top;",
+        "  import uvm_pkg::*;",
+        "  import mverify_uvm_pkg::*;",
+        "  bit clk=0;",
+        "  always #5 clk=~clk;",
+        f"  {if_name} dut_if(clk);",
+        f"  {top} u_dut ("
+    ]
+    conns = []
+    for port in ports:
+        name = port.get("name")
+        if not name:
+            continue
+        expr = "clk" if name.lower() in ("clk", "clock") else f"dut_if.{name}"
+        conns.append(f"    .{name}({expr})")
+    top_lines += [",\n".join(conns), "  );",
+                  "  initial begin",
+                  '    uvm_config_db#(virtual mverify_dut_if)::set(null,"uvm_test_top.env.dut_agent.monitor","vif",dut_if);',
+                  '    run_test();',
+                  "  end",
+                  "endmodule", ""]
+    (out/"mverify_tb_top.sv").write_text("\n".join(top_lines))
+
+    # Sequence template is deliberately non-runnable until the engineer maps
+    # a legal transaction to actual DUT pins and adds protocol timing.
+    seq_template = [
+        "// REVIEW TEMPLATE ONLY: do not add to compile list until signal mapping is approved.",
+        "class mverify_protocol_sequence extends uvm_sequence #(mverify_observation);",
+        "  `uvm_object_utils(mverify_protocol_sequence)",
+        '  function new(string name="mverify_protocol_sequence"); super.new(name); endfunction',
+        "  task body();",
+        '    `uvm_warning("MVERIFY_TODO","Map a legal protocol transaction to confirmed DUT inputs before enabling a driver.")',
+        "    // TODO: Add requirement-derived fields, constraints and legal timing.",
+        "    // TODO: Add a dedicated driver/sequencer after clock/reset/handshake review.",
+        "  endtask",
+        "endclass", ""
+    ]
+    (out/"sequences/mverify_protocol_sequence_TEMPLATE.sv").write_text("\n".join(seq_template))
+
+    topology_preview = [
+        "UVM TOPOLOGY PREVIEW (generated hierarchy; runtime output is printed by UVM)",
+        "uvm_test_top : mverify_base_test",
+        "  env : mverify_env",
+        "    dut_agent : mverify_agent",
+        "      monitor : mverify_monitor",
+        "    scoreboard : mverify_scoreboard",
+        "",
+        "Runtime topology is printed during end_of_elaboration_phase with uvm_top.print_topology().",
+        "This preview is the expected component tree. Use the simulator log for the actual factory-built topology."
+    ]
+    (out/"uvm_topology.txt").write_text("\\n".join(topology_preview) + "\\n")
+
+    ordered_rtl, discovered_packages = order_rtl_sources(scan_report.get("files", []))
+    manifest = {
+        "dut_top": top, "dut_ports": ports,
+        "hierarchy": scan_report.get("hierarchy", []),
+        "rtl_files": scan_report.get("files", []),
+        "rtl_package_order": discovered_packages,
+        "rtl_compile_order": ordered_rtl,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generation_mode": "passive_observation_with_test_stubs",
+        "uvm_tests": test_names,
+        "topology_print": "uvm_top.print_topology() in mverify_base_test.end_of_elaboration_phase",
+        "limitations": [
+            "All DUT top-level ports are connected to one virtual interface. This is a top-level pin map, not resolved internal connectivity.",
+            "No DUT input is driven automatically. Signal names do not establish protocol semantics.",
+            "Generated test classes are selectable observation/scenario stubs, not functional tests.",
+            "The protocol sequence file is a review template and is not compiled.",
+            "A functional scoreboard requires a requirement-derived independent reference model.",
+            "Compile and simulate with the target simulator. Mverify does not claim simulation success."
+        ],
+        "selected_architecture": architecture or {"id":"passive","name":"Passive observation-first"}
+    }
+    (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (out/"verification_testcases.json").write_text(json.dumps(catalog, indent=2))
+    (out/"APPROVED_ARCHITECTURE.json").write_text(json.dumps({
+        "selected_architecture": manifest["selected_architecture"],
+        "dut_top": top, "mode": "passive_observation",
+        "approval_scope": "Top-level pin map and passive monitor only; active stimulus not approved."
+    }, indent=2))
+
+    flist = ["+incdir+.", "+incdir+interfaces", "+incdir+agents", "+incdir+env", "+incdir+tests"]
+    flist += ordered_rtl + ["interfaces/"+if_name+".sv", "mverify_uvm_pkg.sv", "mverify_tb_top.sv"]
     (out/"mverify.f").write_text("\n".join(flist)+"\n")
     (out/"compile_vcs.sh").write_text(
-        "#!/bin/bash\nset -e\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
         "vcs -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps "
-        "-f mverify.f -top mverify_tb_top -o simv_mverify\n")
-    (out/"compile_vcs.sh").chmod(0o755)
+        "-debug_access+all -f mverify.f -top mverify_tb_top -o simv_mverify -l compile.log\n")
+    (out/"run_vcs.sh").write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        "TEST_NAME=\"${1:-mverify_base_test}\"\n"
+        "./simv_mverify +UVM_TESTNAME=\"$TEST_NAME\" +UVM_VERBOSITY=UVM_MEDIUM -l sim.log\n")
+    for script in ("compile_vcs.sh", "run_vcs.sh"):
+        (out/script).chmod(0o755)
+
+    testcase_lines = "\n".join(
+        f"- `{x['uvm_test']}` — {x['name']} ({x['kind']}; oracle: {x['oracle']})"
+        for x in test_names
+    ) or "- No scenarios were discovered."
     (out/"README_GENERATED.md").write_text(
-        "# Mverify generated UVM project\n\nDUT top: `%s`\n\n"%top+
-        "This is an editable UVM 1.2 structural smoke environment. It creates bounded input activity for non-reset input ports, samples representative outputs, connects monitor analysis ports to a scoreboard, and reports unknown observations.\n\n"
-        "## Before functional verification\n1. Review reset polarity, timing, interface directions and generated drive assignments.\n2. Confirm that the structural smoke stimulus is legal for this DUT.\n3. Add an independent requirement-derived reference model and functional comparisons.\n4. Add protocol transaction decoding, assertions and functional coverage.\n5. Compile with VCS and resolve project-specific dependencies.\n\nThe base test performs bounded structural input activity. The scoreboard counts observations and reports unknown samples. This is not a protocol-functional pass or PCIe compliance result. Suggested scenarios are proposals and require engineer approval. See `verification_testcases.json`.\n")
+        f"# Generated UVM environment: {top}\n\n"
+        "This release creates a passive UVM environment. It connects every parsed top-level port to `mverify_dut_if`, "
+        "samples all non-clock ports, connects the monitor analysis port to a scoreboard, and prints the UVM component "
+        "topology during end-of-elaboration.\n\n"
+        "## Compile and run (VCS / UVM 1.2)\n\n"
+        "```bash\n./compile_vcs.sh\n./run_vcs.sh mverify_base_test\n```\n\n"
+        "## Generated test names\n\n" + testcase_lines + "\n\n"
+        "These tests are observation/scenario stubs. They do not apply protocol stimulus or prove functional correctness. "
+        "Review `mverify_generation_manifest.json`, `verification_testcases.json`, and the sequence template before "
+        "adding active drivers and an independent reference model.\n")
     (out/"GENERATION_STATUS.md").write_text(
-        "# Mverify generated UVM status\n\n"
-        "Generation mode: **bounded structural stimulus and output observation**.\n\n"
-        "The generated driver applies the same bounded 32-bit smoke value to non-reset input signals in its interface group. The monitor samples one representative output per group. The scoreboard counts observations and flags unknown samples. It does not contain a DUT-specific functional oracle.\n\n"
-        "A successful run proves only that this structural smoke environment executes. It does not prove protocol functionality or PCIe compliance. Use the generated scenario catalog and approved requirements to add an independent reference model.\n")
-    architecture = architecture or {"id":"passive", "name":"Passive observation-first", "agents":[]}
-    (out/"APPROVED_ARCHITECTURE.json").write_text(json.dumps({
-        "selected_architecture": architecture,
-        "dut_top": top,
-        "approval_scope": "Topology proposal only. Signal semantics and active pin-level drivers require explicit review.",
-        "interface_candidates": groups,
-        "active_driver_generation": "blocked_until_signal_mapping_approval"
-    }, indent=2))
-    manifest["selected_architecture"] = architecture
-    manifest["active_driver_generation"] = "blocked_until_signal_mapping_approval"
-    (out/"mverify_generation_manifest.json").write_text(json.dumps(manifest,indent=2))
-    return {"output_dir":str(out),"top":top,"ports":len(ports),"agents":agent_names,
-            "interfaces":interfaces,"files":len(list(out.rglob("*")))}
+        "# Generation status\n\n"
+        "- Top-level port interface: generated from parsed declarations.\n"
+        "- Passive monitor: samples every parsed non-clock top-level port.\n"
+        "- Scoreboard: receives observations and reports count.\n"
+        "- UVM topology: printed with `uvm_top.print_topology()`.\n"
+        "- Scenario test classes: generated as selectable observation stubs.\n"
+        "- Active protocol stimulus: not generated until a reviewed signal/protocol mapping exists.\n"
+        "- Functional oracle: not inferred from RTL port names.\n")
+    return {"output_dir": str(out), "top": top, "ports": len(ports),
+            "tests": len(test_names), "files": len(list(out.rglob("*"))),
+            "topology_print": True, "mode": "passive_observation_with_test_stubs"}

@@ -1,4 +1,4 @@
-# Mverify 0.11.0 — RTL Engineering Workbench
+# Mverify 0.12.1 — RTL Engineering Workbench
 
 Mverify is a local-first desktop application for RTL project discovery, evidence-based design analysis, specification review, verification planning and UVM scaffold generation. It supports general RTL projects. PCIe discovery is an optional protocol-specific extension, not the core architecture.
 
@@ -10,7 +10,10 @@ Mverify is a local-first desktop application for RTL project discovery, evidence
 - `.f` filelist handling for common include-directory, macro, nested-filelist and source entries.
 - Optional Surelog invocation when installed. Tool availability is reported instead of being assumed.
 - Feature detection and requirement-to-RTL mapping. Findings retain their evidence and limitations.
-- Verification scenario catalog and UVM 1.2 scaffold generation.
+- Verification scenario catalog and passive UVM 1.2 scaffold generation.
+- Generated top-level virtual interface, all-port passive monitor, scoreboard connection, selectable observation test stubs and runtime topology print.
+- Desktop UVM topology preview and simulator-log import.
+- Optional Mcore knowledge indexing, lexical RAG search and evidence-grounded Ollama reasoning.
 - Optional local Ollama advisory analysis and separate Mcore learning service.
 - SQLite scan history stored under `~/.mverify` by default.
 
@@ -18,9 +21,9 @@ Mverify is a local-first desktop application for RTL project discovery, evidence
 
 The lightweight parser is not a complete SystemVerilog or VHDL compiler. Project inventory can discover VHDL and other EDA inputs, but VHDL semantic parsing is not implemented in this release. The hierarchy and port topology are candidate evidence. They do not prove resolved instance-to-port connectivity, unique drivers, CDC safety, timing closure or functional correctness.
 
-Surelog is optional. A successful Surelog parse/elaboration process is not simulation. The current UVM generator is a scaffold. It is not a protocol-compliant testbench and does not prove that the DUT passes verification. Active stimulus requires reviewed signal semantics, reset behavior, timing and protocol mapping. Functional scoreboarding requires an independent requirement-derived reference model.
+Surelog is optional. A successful Surelog parse/elaboration process is not simulation. The current UVM generator is a passive scaffold. It maps parsed top-level ports and samples them. It does not drive DUT inputs. Generated scenario tests are observation stubs, not protocol-functional tests. The sequence template is not compiled. Active stimulus requires reviewed signal semantics, reset behavior, timing and protocol mapping. Functional scoreboarding requires an independent requirement-derived reference model.
 
-Mcore is optional and separate. Training examples require explicit engineer consent and review. The application does not update model weights when it records an experience.
+Mcore is optional and separate. The desktop can index RTL text, search the Mcore knowledge store and send evidence-grounded engineering questions to the Mcore API. Current retrieval is lexical term matching, not vector embedding retrieval. Model reasoning requires Ollama and an installed model. Training examples require explicit engineer consent and review. The application does not update model weights when it records an experience.
 
 ## Quick start (RHEL / Linux)
 
@@ -68,4 +71,12 @@ python -m pytest -q
 python -m compileall -q mverify mcore desktop_app.py
 ```
 
-See `KNOWN_LIMITATIONS_v0.11.0.md` and `CHANGELOG_v0.11.0.md` for release boundaries.
+Start Mcore in a second terminal when you need RAG/model assistance:
+
+```bash
+./run_mcore.sh
+```
+
+Then open the Mcore tab, check the service, index RTL into RAG, and search or ask an engineering question.
+
+See `KNOWN_LIMITATIONS_v0.12.1.md` and `CHANGELOG_v0.12.1.md` for release boundaries.

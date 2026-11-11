@@ -1,6 +1,6 @@
 """Native Mverify desktop workbench. Tkinter is used to avoid a browser runtime."""
 from __future__ import annotations
-import json, threading, traceback
+import json, threading, traceback, urllib.request, urllib.error
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -23,7 +23,7 @@ class MverifyDesktop(tk.Tk):
         configure_logging(self.config_data.log_dir)
         initialize_database(self.config_data.database_path)
         self.report = None; self.requirements = []; self.architectures = []
-        self.model = None; self.intelligence = None; self.testcases = []
+        self.model = None; self.intelligence = None; self.testcases = []; self.last_uvm_output = None
         self._build()
         self._log("Workspace ready. Analysis stays local to this machine.")
 
@@ -71,7 +71,9 @@ class MverifyDesktop(tk.Tk):
         self.source_title=ttk.Label(self.source_tab,text="Select a source file in the project explorer",style="Muted.TLabel"); self.source_title.pack(anchor="w")
         self.source_text=self._text(self.source_tab)
         topo_bar=ttk.Frame(self.topology_tab); topo_bar.pack(fill="x")
-        ttk.Label(topo_bar,text="Hierarchy and port declarations. Connectivity status is evidence-labelled.",style="Muted.TLabel").pack(side="left")
+        ttk.Label(topo_bar,text="RTL hierarchy, generated UVM topology and runtime simulator topology.",style="Muted.TLabel").pack(side="left")
+        ttk.Button(topo_bar,text="Show generated UVM topology",command=self._show_generated_topology).pack(side="left",padx=5)
+        ttk.Button(topo_bar,text="Load simulator log",command=self._load_uvm_log).pack(side="left",padx=5)
         self.topology_text=self._text(self.topology_tab)
         self._build_spec(); self._build_intel(); self._build_uvm(); self._build_tests(); self._build_mcore()
         activity=ttk.LabelFrame(root,text="Activity log",padding=5); activity.pack(fill="x",pady=(8,0))
@@ -191,6 +193,7 @@ class MverifyDesktop(tk.Tk):
         ttk.Button(bar,text="Show architecture",command=self._show_arch).pack(side="left",padx=5)
         self.approve=tk.BooleanVar(value=False);ttk.Checkbutton(bar,text="I reviewed this topology proposal",variable=self.approve).pack(side="left",padx=5)
         ttk.Button(bar,text="Generate UVM scaffold",command=self._generate).pack(side="left",padx=5)
+        ttk.Button(bar,text="Load simulator log",command=self._load_uvm_log).pack(side="left",padx=5)
         self.arch_text=self._text(self.uvm_tab)
     def _refresh_arch(self):
         names=[f"{x['id']} — {x['name']}" for x in self.architectures];self.arch_combo["values"]=names
@@ -207,7 +210,50 @@ class MverifyDesktop(tk.Tk):
         top=self.report.get("selected_top") or self.top_var.get().strip()
         if not top:messagebox.showerror("Top module required","Select a DUT top.");return
         out=Path(self.report["project_dir"])/"mverify_uvm_generated"
-        self._bg("Generating UVM scaffold…",lambda:generate_uvm_project(self.report,out,top,architecture=a),lambda r:(self._log(f"Generated {r['files']} files in {r['output_dir']}"),messagebox.showinfo("UVM scaffold generated",f"{r['output_dir']}\nReview README_GENERATED.md before simulation.")))
+        def done(result):
+            self.last_uvm_output=Path(result["output_dir"])
+            preview=self.last_uvm_output/"uvm_topology.txt"
+            content=preview.read_text() if preview.exists() else json.dumps(result,indent=2)
+            self._set(self.arch_text,content)
+            self._set(self.topology_text,content)
+            self.tabs.select(self.topology_tab)
+            self._log(f"Generated {result['files']} files and {result['tests']} selectable observation/scenario stubs in {result['output_dir']}.")
+            messagebox.showinfo("UVM scaffold generated",f"{result['output_dir']}\nGenerated topology preview is now shown in the Topology tab. Runtime topology is printed by UVM when the test reaches end_of_elaboration_phase.")
+        self._bg("Generating UVM scaffold…",
+                 lambda:generate_uvm_project(self.report,out,top,architecture=a,requirements=self.requirements),
+                 done)
+
+    def _show_generated_topology(self):
+        if not self.last_uvm_output:
+            messagebox.showinfo("No generated topology","Generate a UVM scaffold first.")
+            return
+        preview=self.last_uvm_output/"uvm_topology.txt"
+        if not preview.is_file():
+            messagebox.showwarning("Topology preview missing",str(preview))
+            return
+        self._set(self.topology_text,preview.read_text(encoding="utf-8",errors="replace"))
+        self.tabs.select(self.topology_tab)
+
+    def _load_uvm_log(self):
+        filename=filedialog.askopenfilename(title="Select VCS/Questa simulator log",
+            filetypes=[("Simulation logs","*.log *.txt"),("All files","*.*")])
+        if not filename:
+            return
+        try:
+            lines=Path(filename).read_text(encoding="utf-8",errors="replace").splitlines()
+            hits=[i for i,line in enumerate(lines) if "MVERIFY_TOPOLOGY" in line or "uvm_test_top" in line or "mverify_env" in line]
+            if not hits:
+                excerpt=("No UVM topology markers found. Check that the generated test compiled and ran.\n"
+                         "Expected marker: MVERIFY_TOPOLOGY. Expected tree names include mverify_env and dut_agent.")
+            else:
+                lo=max(0,hits[0]-3); hi=min(len(lines),hits[-1]+120)
+                excerpt="\n".join(lines[lo:hi])
+                if len(excerpt)>50000: excerpt=excerpt[:50000]+"\n... log excerpt truncated ..."
+            self._set(self.topology_text,excerpt)
+            self.tabs.select(self.topology_tab)
+            self._log(f"Loaded runtime UVM topology/log excerpt: {filename}")
+        except OSError as exc:
+            messagebox.showerror("Cannot read simulator log",str(exc))
     def _build_tests(self):
         bar=ttk.Frame(self.tests_tab);bar.pack(fill="x")
         ttk.Button(bar,text="Generate scenario catalog",command=self._generate_tests).pack(side="left")
@@ -217,15 +263,94 @@ class MverifyDesktop(tk.Tk):
         self.testcases=generate_testcases(self.report);self._set(self.tests_text,json.dumps(self.testcases,indent=2));self._log(f"Generated {len(self.testcases)} candidate verification scenarios. Review before use.")
     def _build_mcore(self):
         bar=ttk.Frame(self.mcore_tab);bar.pack(fill="x")
-        ttk.Label(bar,text="Mcore API").pack(side="left");self.mcore_url=tk.StringVar(value="http://127.0.0.1:8765");ttk.Entry(bar,textvariable=self.mcore_url,width=38).pack(side="left",padx=5)
+        ttk.Label(bar,text="Mcore API").pack(side="left")
+        self.mcore_url=tk.StringVar(value="http://127.0.0.1:8765")
+        ttk.Entry(bar,textvariable=self.mcore_url,width=34).pack(side="left",padx=5)
         ttk.Button(bar,text="Check service",command=self._check_mcore).pack(side="left")
-        ttk.Label(self.mcore_tab,text="Mcore is optional. It runs as a separate local service. Its learning queue requires explicit engineer review and consent.",style="Muted.TLabel").pack(anchor="w",pady=8)
+        ttk.Button(bar,text="Index RTL into RAG",command=self._index_rag).pack(side="left",padx=5)
+        ttk.Label(self.mcore_tab,text="Ollama model").pack(anchor="w",pady=(8,2))
+        self.mcore_model=tk.StringVar(value="qwen2.5-coder:14b")
+        ttk.Entry(self.mcore_tab,textvariable=self.mcore_model,width=28).pack(anchor="w")
+        ttk.Label(self.mcore_tab,text="RAG query").pack(anchor="w",pady=(8,2))
+        querybar=ttk.Frame(self.mcore_tab);querybar.pack(fill="x")
+        self.rag_query=tk.StringVar()
+        ttk.Entry(querybar,textvariable=self.rag_query).pack(side="left",fill="x",expand=True)
+        ttk.Button(querybar,text="Search RAG",command=self._search_rag).pack(side="left",padx=5)
+        ttk.Button(querybar,text="Ask Mcore",command=self._ask_mcore).pack(side="left")
+        ttk.Label(self.mcore_tab,text="RAG is implemented as local lexical retrieval over indexed RTL/spec text (not vector embeddings). Model reasoning requires the Mcore API and Ollama. Retrieved evidence is advisory and must be checked against RTL and specifications.",style="Muted.TLabel").pack(anchor="w",pady=8)
         self.mcore_text=self._text(self.mcore_tab)
+
+    def _mcore_request(self, endpoint, payload=None, timeout=30):
+        url=self.mcore_url.get().rstrip("/") + endpoint
+        data=None if payload is None else json.dumps(payload).encode("utf-8")
+        req=urllib.request.Request(url,data=data,headers={"Content-Type":"application/json"} if data is not None else {})
+        with urllib.request.urlopen(req,timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
     def _check_mcore(self):
-        import urllib.request
         def work():
-            with urllib.request.urlopen(self.mcore_url.get().rstrip("/")+"/health",timeout=5) as r:return json.loads(r.read().decode())
-        self._bg("Checking Mcore…",work,lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log("Mcore service connected.")))
+            return self._mcore_request("/health",timeout=5)
+        def done(data):
+            self._set(self.mcore_text,json.dumps(data,indent=2))
+            self._log("Mcore service connected.")
+        self._bg("Checking Mcore…",work,done)
+
+    def _index_rag(self):
+        if not self.report:
+            messagebox.showwarning("Scan first","Scan the RTL project before indexing.")
+            return
+        files=self.report.get("files",[])
+        def work():
+            results=[]
+            for filename in files:
+                path=Path(filename)
+                try:
+                    content=path.read_text(encoding="utf-8",errors="replace")
+                except OSError:
+                    continue
+                if not content.strip():
+                    continue
+                payload={"source":str(path),"topic":"rtl_source","text":content[:2_000_000]}
+                results.append({"file":str(path),"result":self._mcore_request("/knowledge/ingest",payload,timeout=30)})
+            return {"indexed_files":len(results),"results":results,
+                    "note":"Mcore uses local lexical retrieval. This is not vector embedding search."}
+        self._bg("Indexing RTL into Mcore knowledge store…",work,
+                 lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log(f"RAG indexed {d['indexed_files']} RTL files.")))
+
+    def _search_rag(self):
+        query=self.rag_query.get().strip()
+        if not query:
+            messagebox.showwarning("Query required","Enter a question or search phrase.")
+            return
+        self._bg("Searching Mcore knowledge…",
+                 lambda:self._mcore_request("/knowledge/search",{"query":query,"limit":10}),
+                 lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log("Mcore RAG search completed.")))
+
+    def _ask_mcore(self):
+        query=self.rag_query.get().strip()
+        if not query:
+            messagebox.showwarning("Question required","Enter an engineering question.")
+            return
+        if not self.report:
+            messagebox.showwarning("Scan first","Scan the RTL project first.")
+            return
+        def work():
+            top=self.report.get("selected_top")
+            modules=self.report.get("module_details",[])
+            dut=next((m for m in modules if m.get("name")==top),{})
+            evidence={"dut_top":top,"ports":dut.get("ports",[]),
+                      "hierarchy":[e for e in self.report.get("hierarchy",[]) if e.get("parent")==top],
+                      "feature_analysis":self.report.get("feature_analysis",{}),
+                      "semantic_analysis":self.report.get("semantic_analysis",{})}
+            return self._mcore_request("/reason/engineering",{
+                "task":query,"rtl_evidence":evidence,
+                "spec_evidence":getattr(self,"mapped",[]),
+                "tool_evidence":self.report.get("toolchain",{}),
+                "knowledge_limit":10,
+                "model":self.mcore_model.get().strip() or "qwen2.5-coder:14b"
+            },timeout=300)
+        self._bg("Mcore evidence-grounded reasoning…",work,
+                 lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log("Mcore reasoning completed; review cited evidence.")))
 
 if __name__ == "__main__":
     MverifyDesktop().mainloop()

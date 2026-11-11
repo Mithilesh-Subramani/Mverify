@@ -7,11 +7,12 @@ SIGNAL_GROUPS = {
     "clock_reset": [r"clk", r"clock", r"rst", r"reset"],
     "request_stream": [r"req", r"request", r"valid", r"ready", r"payload", r"data", r"last", r"keep", r"strb"],
     "completion_stream": [r"cpl", r"completion", r"rsp", r"response"],
-    "tlp_packet": [r"tlp", r"fmt", r"type", r"opcode", r"tag", r"length", r"first_be", r"last_be"],
+    "tlp_packet": [r"tlp", r"fmt", r"tag", r"length", r"first_be", r"last_be"],
     "dll_control": [r"dllp", r"ack", r"nak", r"seq", r"replay", r"lcrc", r"crc", r"credit", r"fc_"],
     "phy_pipe": [r"pipe", r"phy", r"txdata", r"rxdata", r"txvalid", r"rxvalid", r"elecidle", r"powerdown", r"polarity"],
     "link_training": [r"ltssm", r"train", r"ordered_set", r"lane", r"link_up", r"link_state"],
     "backend_memory": [r"backend", r"dma", r"mem", r"addr", r"write", r"read", r"byte_enable"],
+    "combinational_datapath": [r"operand", r"alu", r"opcode", r"result", r"carry", r"borrow", r"overflow", r"zero_flag", r"compare"],
     "interrupt_status": [r"interrupt", r"msi", r"msix", r"error", r"status", r"fatal"],
 }
 
@@ -68,37 +69,108 @@ def build_dut_model(report, mapped_requirements=None, spec_revision=''):
       ]}
 
 def propose_architectures(model):
-    groups={x['id']:x for x in model.get('interface_candidates',[])}
-    opts=[]
-    def add(id,name,when,agents,pros,risks):
-        opts.append({'id':id,'name':name,'when_to_use':when,'agents':agents,'advantages':pros,'risks':risks})
-    base=[{'name':'clock_reset_agent','role':'Drive and monitor confirmed clock/reset pins','mode':'active_after_signal_confirmation'},
-          {'name':'dut_observer','role':'Capture DUT status and state progression','mode':'passive'}]
-    if 'request_stream' in groups or 'tlp_packet' in groups:
-        base += [{'name':'request_interface_agent','role':'Drive DUT input request/packet interface and monitor handshake','mode':'active_after_protocol_mapping'},
-                 {'name':'response_interface_agent','role':'Monitor DUT response/completion interface','mode':'passive'}]
-    if 'dll_control' in groups:
-        base += [{'name':'data_link_agent','role':'Drive/monitor confirmed ACK, NAK, sequence and flow-control pins','mode':'active_after_protocol_mapping'}]
-    if 'phy_pipe' in groups or 'link_training' in groups:
-        base += [{'name':'pipe_phy_agent','role':'Drive/monitor PIPE-level PHY interface and link training','mode':'active_after_pipe_model_review'}]
-    if 'backend_memory' in groups:
-        base += [{'name':'backend_memory_agent','role':'Model the DUT-facing backend request/response interface','mode':'active_after_handshake_mapping'}]
-    add('layered','Layered interface agents', 'Use when the DUT exposes multiple independently verifiable interfaces.',base,
-        ['Separates stimulus and checking by interface boundary','Supports independent backpressure and error injection'],
-        ['Requires accurate signal direction, clocking and handshake mapping'])
-    add('single_virtual','Single virtual-sequencer environment', 'Use when scenarios must coordinate requests, backend responses and link events.',
-        base+[{'name':'virtual_sequencer','role':'Coordinate traffic across interface agents','mode':'active_after_agent_approval'}],
-        ['Coordinates cross-interface scenarios','Good for end-to-end transaction flows'],
-        ['More complex sequencing and reset synchronization'])
-    add('passive','Passive observation-first environment','Use when interface semantics are not yet confirmed or the DUT is incomplete.',
-        [{'name':'clock_reset_observer','role':'Observe clock/reset','mode':'passive'}, {'name':'protocol_monitors','role':'Observe candidate interfaces without driving them','mode':'passive'}, {'name':'state_progress_monitor','role':'Track observed FSM/status progress','mode':'passive'}],
-        ['Safe first step; does not drive unverified pins','Useful to validate signal mapping'],
-        ['Cannot prove stimulus-response behavior until active drivers are approved'])
-    # Tailor alternatives based on discovered interfaces.
-    if 'phy_pipe' not in groups:
-        for opt in opts:
-            opt['risks'].append('No PIPE/PHY interface was detected. Do not claim physical pin-level PCIe stimulus for this DUT top.')
-    return opts
+    """Return architecture candidates sized to the observed DUT structure.
+
+    Architecture count and topology are derived from interface groups, hierarchy,
+    sequential logic and protocol feature evidence. Signal-name matches remain
+    hypotheses and do not authorize active stimulus.
+    """
+    groups = {x['id']: x for x in model.get('interface_candidates', [])}
+    active_groups = [g for g in groups if g not in ('clock_reset', 'unclassified')]
+    features = {str(x).lower() for x in model.get('features', [])}
+    fsm = model.get('state_machines', [])
+    hierarchy_count = model.get('hierarchy', {}).get('child_count', 0)
+    port_count = model.get('port_count', 0)
+    sem = model.get('semantic_evidence', {})
+    sequential = bool(fsm or sem.get('procedural_blocks', 0) or 'clock_reset' in groups)
+    protocol_heavy = bool(features.intersection({
+        'handshake', 'buffering', 'arbitration', 'integrity_check',
+        'retry_recovery', 'credit_flow', 'packet_formatting',
+        'backend_interface', 'clock_domain'
+    }))
+
+    def candidate(id, name, when, components, rationale, risks):
+        return {
+            'id': id, 'name': name, 'when_to_use': when,
+            'components': components, 'advantages': rationale, 'risks': risks,
+            'evidence': {
+                'dut_top': model.get('dut_top'), 'port_count': port_count,
+                'interface_groups': active_groups, 'direct_child_count': hierarchy_count,
+                'sequential_candidate': sequential, 'state_machine_candidates': len(fsm),
+                'protocol_feature_candidates': sorted(features),
+            },
+            'implementation_status': 'proposal_only_passive_scaffold_currently_generated',
+        }
+
+    passive_monitor = {'name': 'dut_monitor', 'role': 'Observe DUT pins and publish sampled transactions', 'mode': 'passive'}
+    scoreboard = {'name': 'scoreboard', 'role': 'Compare observations with an independently approved reference model', 'mode': 'requires_reference_model'}
+    reset_monitor = {'name': 'reset_monitor', 'role': 'Observe reset sequencing; do not drive unconfirmed polarity', 'mode': 'passive'}
+
+    # A small combinational datapath does not need PCIe-style layered agents.
+    if not sequential and not protocol_heavy and len(active_groups) <= 1 and hierarchy_count <= 2:
+        return [candidate(
+            'combinational_unit', 'Compact combinational DUT environment',
+            'Use for a small combinational block such as an ALU, encoder, decoder or arithmetic unit.',
+            [
+                {'name': 'directed_driver', 'role': 'Apply reviewed operand and control vectors', 'mode': 'active_after_port_mapping'},
+                passive_monitor, scoreboard,
+            ],
+            ['One compact transaction path; no virtual sequencer or protocol-layer agents',
+             'Can use a reference function when the RTL operation and truth table are established'],
+            ['Input-to-output mapping and combinational latency must be confirmed',
+             'A reference model must be independently derived or reviewed'],
+        )]
+
+    # Sequential single-interface blocks need one agent and a state/reset monitor.
+    if len(active_groups) <= 1 and not protocol_heavy and hierarchy_count <= 4:
+        return [candidate(
+            'single_interface', 'Single-interface sequential environment',
+            'Use for a register block, counter, timer, controller or small state machine.',
+            [
+                {'name': 'dut_agent', 'role': 'One driver/sequencer and monitor for the confirmed DUT interface', 'mode': 'active_after_signal_mapping'},
+                reset_monitor, scoreboard,
+            ],
+            ['Small topology matched to one functional interface',
+             'State and reset checks can be added without unnecessary virtual sequencing'],
+            ['Clock/reset semantics and legal state transitions need review',
+             'No driver is enabled from signal names alone'],
+        )]
+
+    # Multiple independent protocol boundaries justify layered agents.
+    layered_components = [reset_monitor]
+    for group in active_groups:
+        layered_components.append({
+            'name': group + '_agent',
+            'role': 'Candidate driver/monitor for the ' + group.replace('_', ' ') + ' boundary',
+            'mode': 'active_after_interface_contract_review',
+        })
+    layered_components.extend([passive_monitor, scoreboard])
+    options = [candidate(
+        'layered', 'Layered multi-interface environment',
+        'Use when the DUT has multiple independent interface groups or substantial protocol logic.',
+        layered_components,
+        ['Separates independently verified boundaries',
+         'Supports per-interface backpressure, error injection and coverage'],
+        ['Each interface needs resolved connections, clocking and protocol semantics'],
+    )]
+    if len(active_groups) >= 3 or hierarchy_count >= 6 or len(fsm) >= 2:
+        options.append(candidate(
+            'coordinated_layered', 'Layered environment with virtual-sequence coordination',
+            'Use only when end-to-end scenarios must coordinate several agents or state machines.',
+            layered_components + [{'name': 'virtual_sequencer', 'role': 'Coordinate approved sequences across agents', 'mode': 'enabled_after_agent_implementation'}],
+            ['Coordinates cross-interface transactions and recovery scenarios',
+             'Supports system-level scenarios across multiple protocol boundaries'],
+            ['Higher implementation and debug cost',
+             'Requires each underlying agent and transaction model to be implemented first'],
+        ))
+    options.append(candidate(
+        'passive_observation', 'Passive observation-first environment',
+        'Use when interface semantics or connectivity are not yet sufficiently resolved.',
+        [reset_monitor, passive_monitor, scoreboard],
+        ['Safe structural starting point', 'Does not drive unverified DUT inputs'],
+        ['Cannot prove stimulus-response behavior without approved drivers and an oracle'],
+    ))
+    return options
 
 def _ollama(prompt, model, url, timeout=90):
     payload=json.dumps({'model':model,'prompt':prompt,'stream':False,'format':'json'}).encode()
@@ -146,9 +218,8 @@ def generate_intelligence(model, architectures, requirements, ollama_enabled=Fal
             result['model_status']='unavailable_or_invalid_response'
             result['model_error']=str(exc)
     if result['architecture_recommendation'] is None:
-        # Prefer layered if multiple interfaces exist; otherwise passive until semantics are confirmed.
-        nonempty=sum(1 for g in groups if g['id'] not in ('clock_reset','unclassified'))
-        preferred='layered' if nonempty>=2 else 'passive'
-        result['architecture_recommendation']=next(x for x in architectures if x['id']==preferred)
-        result['recommendation_basis']='Deterministic interface-count heuristic; review alternatives.'
+        # The first candidate is selected by DUT structure above. No fixed
+        # PCIe-style architecture is imposed on a simple combinational block.
+        result['architecture_recommendation']=architectures[0] if architectures else None
+        result['recommendation_basis']='Evidence-based structural classification; review signal mappings and limitations.'
     return result
