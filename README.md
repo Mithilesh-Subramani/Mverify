@@ -80,3 +80,15 @@ Start Mcore in a second terminal when you need RAG/model assistance:
 Then open the Mcore tab, check the service, index RTL into RAG, and search or ask an engineering question.
 
 See `KNOWN_LIMITATIONS_v0.12.1.md` and `CHANGELOG_v0.12.1.md` for release boundaries.
+
+
+## Version 0.12.3 updates
+
+- Desktop specification import performs automatic evidence-based requirement triage. Ambiguous requirements remain available for manual override. Approval does not prove compliance.
+- Ask Mcore and Search RAG now display readable engineering summaries and source evidence instead of raw JSON.
+- Ask Mcore performs retrieval through Mcore and uses the selected local Ollama model; Search RAG is retrieval-only.
+- See `KNOWN_LIMITATIONS_v0.12.3.md` for exact implementation boundaries.
+
+## Mcore retrieval in 0.12.3
+
+Mcore retrieval is scoped to the active project. Ask Mcore automatically retrieves current-project evidence. Hybrid lexical/vector retrieval is enabled when Ollama `nomic-embed-text` is installed; otherwise it uses lexical fallback. Re-index after RTL changes. See `README_MCORE_INTEGRATION.md`.

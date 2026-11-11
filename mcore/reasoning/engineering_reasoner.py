@@ -10,8 +10,10 @@ from mcore.core.ollama import OllamaClient
 
 SYSTEM_POLICY = """
 You are Mcore, a VLSI engineering reasoning assistant.
-Work only from supplied RTL/specification/tool evidence and retrieved knowledge.
-Do not assume the DUT is PCIe or any other standard protocol.
+Work only from the CURRENT project's supplied RTL/specification/tool evidence and retrieved knowledge.
+Never reuse facts, protocol assumptions, module names or conclusions from another project.
+Do not assume the DUT is PCIe or any other standard protocol. The current project identity and top module are authoritative.
+Answer the user's actual question. If asked for risks, give risks first; do not respond with a generic DUT-identification explanation.
 Separate: confirmed_facts, inferences, assumptions, unknowns and recommendations.
 Every RTL claim must identify a source file and line/symbol when supplied.
 Every standards claim must identify an exact source and revision when supplied.
@@ -52,15 +54,16 @@ def _as_text(value: Any, max_chars: int = 50000) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)[:max_chars]
 
 def build_engineering_prompt(task: str, rtl_evidence=None, spec_evidence=None,
-                             tool_evidence=None, retrieved_knowledge=None) -> str:
+                             tool_evidence=None, retrieved_knowledge=None, project_context=None) -> str:
     payload = {
         "task": task,
+        "current_project_context": project_context or {},
         "rtl_evidence": rtl_evidence or {},
         "specification_evidence": spec_evidence or {},
         "tool_evidence": tool_evidence or {},
         "retrieved_knowledge": retrieved_knowledge or [],
     }
-    return SYSTEM_POLICY + "\\n\\nENGINEERING INPUT:\\n" + _as_text(payload)
+    return SYSTEM_POLICY + "\n\nENGINEERING INPUT:\n" + _as_text(payload)
 
 def validate_reasoning_result(result: Dict[str, Any]) -> List[str]:
     errors = []
@@ -91,9 +94,9 @@ class EngineeringReasoner:
         self.client = client or OllamaClient()
 
     def reason(self, task, rtl_evidence=None, spec_evidence=None,
-               tool_evidence=None, retrieved_knowledge=None):
+               tool_evidence=None, retrieved_knowledge=None, project_context=None):
         prompt = build_engineering_prompt(task, rtl_evidence, spec_evidence,
-                                          tool_evidence, retrieved_knowledge)
+                                          tool_evidence, retrieved_knowledge, project_context)
         result = self.client.generate_json(prompt)
         errors = validate_reasoning_result(result)
         return {

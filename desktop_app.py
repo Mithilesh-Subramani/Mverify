@@ -1,6 +1,6 @@
 """Native Mverify desktop workbench. Tkinter is used to avoid a browser runtime."""
 from __future__ import annotations
-import json, threading, traceback, urllib.request, urllib.error
+import json, threading, traceback, urllib.request, urllib.error, hashlib
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -9,9 +9,65 @@ from mverify.core.logging_setup import configure_logging
 from mverify.core.project_scanner import scan_project
 from mverify.storage.database import initialize_database, save_scan
 from mverify.core.spec_engine import extract_spec_text, extract_candidate_requirements, load_requirements_csv, map_requirements
+from mverify.core.requirement_intelligence import apply_auto_triage
 from mverify.core.design_intelligence import build_dut_model, propose_architectures, generate_intelligence
 from mverify.core.uvm_generator import generate_uvm_project
 from mverify.core.testcase_engine import generate_testcases
+
+def _format_value(value, indent=0):
+    """Render structured Mcore output as readable engineering notes."""
+    pad="  "*indent
+    if isinstance(value, dict):
+        lines=[]
+        for key,val in value.items():
+            label=key.replace("_"," ").strip().capitalize()
+            if isinstance(val,(dict,list)):
+                lines.append(f"{pad}{label}:")
+                lines.append(_format_value(val,indent+1))
+            else:
+                lines.append(f"{pad}{label}: {val}")
+        return "\n".join(x for x in lines if x)
+    if isinstance(value,list):
+        if not value:return pad+"(none reported)"
+        lines=[]
+        for item in value:
+            if isinstance(item,(dict,list)):
+                lines.append(pad+"•")
+                lines.append(_format_value(item,indent+1))
+            else: lines.append(pad+"• "+str(item))
+        return "\n".join(lines)
+    return pad+str(value)
+
+def format_mcore_response(data, raw=False):
+    if raw:return json.dumps(data,indent=2,ensure_ascii=False)
+    if not isinstance(data,dict):return str(data)
+    if "results" in data and isinstance(data["results"],list):
+        lines=["RAG RETRIEVAL RESULTS", "="*24]
+        results=data["results"]
+        if not results:lines.append("No matching indexed evidence was found.")
+        for i,item in enumerate(results,1):
+            lines += [f"\n{i}. {item.get('topic','Evidence')}",f"   Source: {item.get('source','unknown')}",
+                      f"   Relevance score: {item.get('score','n/a')}",
+                      "   Evidence:", "   "+str(item.get("content","")).replace("\n","\n   ")]
+        return "\n".join(lines)
+    result=data.get("result",data)
+    if isinstance(result,dict):
+        lines=["MCORE ENGINEERING ANALYSIS", "="*28]
+        for key in ("design_understanding","confirmed_facts","inferences","assumptions","unknowns","requirement_analysis"):
+            if result.get(key) is not None:
+                lines += ["\n"+key.replace("_"," ").upper(), _format_value(result.get(key),1)]
+        strategy=result.get("verification_strategy")
+        if strategy:
+            lines += ["\nVERIFICATION STRATEGY",_format_value(strategy,1)]
+        for key in ("risks","validation_plan","questions_for_engineer"):
+            if result.get(key):lines += ["\n"+key.replace("_"," ").upper(),_format_value(result[key],1)]
+        confidence=result.get("confidence")
+        if confidence:lines += ["\nCONFIDENCE",_format_value(confidence,1)]
+        if data.get("retrieved_sources"):
+            lines += ["\nRETRIEVED SOURCES",_format_value(data["retrieved_sources"],1)]
+        lines += ["\nVALIDATION NOTE",str(data.get("validation_status","Review all claims against source RTL and specification."))]
+        return "\n".join(lines)
+    return _format_value(data)
 
 class MverifyDesktop(tk.Tk):
     def __init__(self):
@@ -144,8 +200,9 @@ class MverifyDesktop(tk.Tk):
         except OSError as e:messagebox.showerror("Cannot read file",str(e))
     def _build_spec(self):
         bar=ttk.Frame(self.spec_tab);bar.pack(fill="x")
-        ttk.Button(bar,text="Load specification",command=self._load_spec).pack(side="left")
-        ttk.Button(bar,text="Map approved requirements",command=self._map).pack(side="left",padx=6)
+        ttk.Button(bar,text="Load specification + auto compare",command=self._load_spec).pack(side="left")
+        ttk.Button(bar,text="Re-run automatic comparison",command=self._auto_compare).pack(side="left",padx=6)
+        ttk.Button(bar,text="Map approved requirements",command=self._map).pack(side="left")
         self.spec_status=ttk.Label(self.spec_tab,text="Scan the project before loading a specification.");self.spec_status.pack(anchor="w",pady=6)
         self.spec_text=self._text(self.spec_tab)
     def _load_spec(self):
@@ -155,13 +212,35 @@ class MverifyDesktop(tk.Tk):
         def work():
             path=Path(p); req=load_requirements_csv(path) if path.suffix.lower()==".csv" else extract_candidate_requirements(extract_spec_text(path),path.name)
             for x in req:x.setdefault("clause","")
-            return req,map_requirements(req,self.report)
+            premap=map_requirements(req,self.report)
+            reviewed=apply_auto_triage(req,premap)
+            by_id={x.get("requirement_id"):x for x in premap}
+            for row in reviewed:
+                row["rtl_mapping"] = by_id.get(row.get("requirement_id"), {})
+            return reviewed,premap
         def done(data):
             self.requirements,self.mapped=data;self.spec_path=p
-            self._set(self.spec_text,json.dumps(self.requirements,indent=2))
-            self.spec_status.configure(text=f"{len(self.requirements)} candidates loaded. Edit review_status in the JSON, then map.")
-            self._log(f"Loaded {len(self.requirements)} requirement candidates from {Path(p).name}.")
-        self._bg("Extracting specification…",work,done)
+            self._show_requirement_review()
+            self._log(f"Loaded and automatically assessed {len(self.requirements)} requirement candidates from {Path(p).name}.")
+        self._bg("Extracting and comparing specification to RTL…",work,done)
+    def _show_requirement_review(self):
+        counts={"approved":0,"needs_review":0,"rejected":0}
+        for row in self.requirements: counts[row.get("review_status","needs_review")]=counts.get(row.get("review_status","needs_review"),0)+1
+        self.spec_status.configure(text=(f"{len(self.requirements)} candidates | auto-approved: {counts['approved']} | "
+                                         f"manual review: {counts['needs_review']} | rejected: {counts['rejected']} | "
+                                         "Edit review_status for manual override, then map approved requirements."))
+        self._set(self.spec_text,json.dumps(self.requirements,indent=2))
+    def _auto_compare(self):
+        if not self.report:messagebox.showwarning("Scan first","Scan RTL first.");return
+        try: rows=json.loads(self.spec_text.get("1.0","end"))
+        except json.JSONDecodeError as e:messagebox.showerror("Invalid JSON",str(e));return
+        if not isinstance(rows,list):messagebox.showwarning("Invalid data","Requirement data must be a JSON list.");return
+        premap=map_requirements(rows,self.report)
+        reviewed=apply_auto_triage(rows,premap)
+        by_id={x.get("requirement_id"):x for x in premap}
+        for row in reviewed: row["rtl_mapping"]=by_id.get(row.get("requirement_id"),{})
+        self.requirements=reviewed;self.mapped=premap;self._show_requirement_review()
+        self._log("Automatic specification-to-RTL comparison completed. Approval is traceability triage, not proof of compliance.")
     def _map(self):
         if not self.report:messagebox.showwarning("Scan first","Scan RTL first.");return
         try: approved=json.loads(self.spec_text.get("1.0","end"))
@@ -277,7 +356,7 @@ class MverifyDesktop(tk.Tk):
         ttk.Entry(querybar,textvariable=self.rag_query).pack(side="left",fill="x",expand=True)
         ttk.Button(querybar,text="Search RAG",command=self._search_rag).pack(side="left",padx=5)
         ttk.Button(querybar,text="Ask Mcore",command=self._ask_mcore).pack(side="left")
-        ttk.Label(self.mcore_tab,text="RAG is implemented as local lexical retrieval over indexed RTL/spec text (not vector embeddings). Model reasoning requires the Mcore API and Ollama. Retrieved evidence is advisory and must be checked against RTL and specifications.",style="Muted.TLabel").pack(anchor="w",pady=8)
+        ttk.Label(self.mcore_tab,text="Ask Mcore automatically retrieves evidence from the active project only. Hybrid vector + lexical retrieval is used when the Ollama embedding model is available; otherwise it falls back to lexical search. Search RAG is a retrieval diagnostic. Verify all conclusions against RTL and specifications.",style="Muted.TLabel").pack(anchor="w",pady=8)
         self.mcore_text=self._text(self.mcore_tab)
 
     def _mcore_request(self, endpoint, payload=None, timeout=30):
@@ -295,12 +374,18 @@ class MverifyDesktop(tk.Tk):
             self._log("Mcore service connected.")
         self._bg("Checking Mcore…",work,done)
 
+    def _project_id(self):
+        root=str(Path(self.report.get("project_dir", "")).expanduser().resolve())
+        return hashlib.sha256(root.encode("utf-8")).hexdigest()[:24]
+
     def _index_rag(self):
         if not self.report:
             messagebox.showwarning("Scan first","Scan the RTL project before indexing.")
             return
         files=self.report.get("files",[])
+        project_id=self._project_id()
         def work():
+            self._mcore_request("/knowledge/project/clear",{"project_id":project_id},timeout=15)
             results=[]
             for filename in files:
                 path=Path(filename)
@@ -310,10 +395,11 @@ class MverifyDesktop(tk.Tk):
                     continue
                 if not content.strip():
                     continue
-                payload={"source":str(path),"topic":"rtl_source","text":content[:2_000_000]}
+                payload={"source":str(path),"topic":"rtl_source","text":content[:2_000_000],"project_id":project_id}
                 results.append({"file":str(path),"result":self._mcore_request("/knowledge/ingest",payload,timeout=30)})
-            return {"indexed_files":len(results),"results":results,
-                    "note":"Mcore uses local lexical retrieval. This is not vector embedding search."}
+            status=self._mcore_request("/knowledge/project/status",{"project_id":project_id},timeout=15)
+            return {"indexed_files":len(results),"results":results,"project_status":status,
+                    "note":"Project-scoped hybrid retrieval. Vector embeddings are used when the configured Ollama embedding model is available; otherwise lexical retrieval is used."}
         self._bg("Indexing RTL into Mcore knowledge store…",work,
                  lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log(f"RAG indexed {d['indexed_files']} RTL files.")))
 
@@ -323,8 +409,8 @@ class MverifyDesktop(tk.Tk):
             messagebox.showwarning("Query required","Enter a question or search phrase.")
             return
         self._bg("Searching Mcore knowledge…",
-                 lambda:self._mcore_request("/knowledge/search",{"query":query,"limit":10}),
-                 lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log("Mcore RAG search completed.")))
+                 lambda:self._mcore_request("/knowledge/search",{"query":query,"limit":10,"project_id":self._project_id()}),
+                 lambda d:(self._set(self.mcore_text,format_mcore_response(d)),self._log("Mcore RAG search completed.")))
 
     def _ask_mcore(self):
         query=self.rag_query.get().strip()
@@ -332,25 +418,50 @@ class MverifyDesktop(tk.Tk):
             messagebox.showwarning("Question required","Enter an engineering question.")
             return
         if not self.report:
-            messagebox.showwarning("Scan first","Scan the RTL project first.")
+            messagebox.showwarning("Scan first","Scan the project first.")
             return
+        project_id=self._project_id()
         def work():
+            # Prevent stale cross-project context. If this project has never been
+            # indexed, build its index automatically before asking the model.
+            status=self._mcore_request("/knowledge/project/status",{"project_id":project_id},timeout=15)
+            if not status.get("chunks"):
+                self._mcore_request("/knowledge/project/clear",{"project_id":project_id},timeout=15)
+                for filename in self.report.get("files",[]):
+                    path=Path(filename)
+                    try: content=path.read_text(encoding="utf-8",errors="replace")
+                    except OSError: continue
+                    if content.strip():
+                        self._mcore_request("/knowledge/ingest",{
+                            "source":str(path),"topic":"rtl_source","text":content[:2_000_000],
+                            "project_id":project_id
+                        },timeout=45)
             top=self.report.get("selected_top")
             modules=self.report.get("module_details",[])
             dut=next((m for m in modules if m.get("name")==top),{})
-            evidence={"dut_top":top,"ports":dut.get("ports",[]),
-                      "hierarchy":[e for e in self.report.get("hierarchy",[]) if e.get("parent")==top],
-                      "feature_analysis":self.report.get("feature_analysis",{}),
-                      "semantic_analysis":self.report.get("semantic_analysis",{})}
+            evidence={
+                "dut_top":top,
+                "ports":dut.get("ports",[]),
+                "selected_module":dut,
+                "all_module_names":[m.get("name") for m in modules],
+                "hierarchy":[e for e in self.report.get("hierarchy",[]) if e.get("parent")==top],
+                "project_summary":self.report.get("summary",{}),
+                "feature_analysis":self.report.get("feature_analysis",{}),
+                "semantic_analysis":self.report.get("semantic_analysis",{}),
+                "analysis_scope":self.report.get("analysis_scope",{}),
+                "source_files":self.report.get("files",[]),
+            }
             return self._mcore_request("/reason/engineering",{
-                "task":query,"rtl_evidence":evidence,
+                "task":query,"project_id":project_id,
+                "project_context":{"project_dir":self.report.get("project_dir"),"project_id":project_id,"dut_top":top},
+                "rtl_evidence":evidence,
                 "spec_evidence":getattr(self,"mapped",[]),
                 "tool_evidence":self.report.get("toolchain",{}),
-                "knowledge_limit":10,
+                "knowledge_limit":12,
                 "model":self.mcore_model.get().strip() or "qwen2.5-coder:14b"
-            },timeout=300)
-        self._bg("Mcore evidence-grounded reasoning…",work,
-                 lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log("Mcore reasoning completed; review cited evidence.")))
+            },timeout=360)
+        self._bg("Mcore: retrieving current-project evidence and reasoning…",work,
+                 lambda d:(self._set(self.mcore_text,format_mcore_response(d)),self._log("Mcore reasoning completed using current-project evidence.")))
 
 if __name__ == "__main__":
     MverifyDesktop().mainloop()

@@ -14,7 +14,15 @@ from mcore.reasoning.engineering_reasoner import EngineeringReasoner
 from mcore.reasoning.evaluation import evaluate_claim_ledger
 
 DATA = Path(os.environ.get("MCORE_HOME", os.path.expanduser("~/.mcore"))).expanduser()
-KNOWLEDGE = KnowledgeStore(DATA / "knowledge.sqlite3")
+# Embeddings are optional. If the local embedding model is unavailable, retrieval
+# transparently falls back to project-scoped lexical ranking.
+_EMBED_CLIENT = OllamaClient(
+    base_url=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+    model=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b"),
+    embedding_model=os.environ.get("MCORE_EMBEDDING_MODEL", "nomic-embed-text"),
+    timeout=30,
+)
+KNOWLEDGE = KnowledgeStore(DATA / "knowledge.sqlite3", embedder=_EMBED_CLIENT.embed)
 TRAINING = TrainingDataset(DATA / "training.sqlite3")
 LEARNING = LearningEngine(DATA / "learning.sqlite3")
 
@@ -73,7 +81,19 @@ class Handler(BaseHTTPRequestHandler):
             task = (data.get("task") or "").strip()
             if not task:
                 return _json(self, 400, {"error": "task_required"})
-            retrieved = KNOWLEDGE.search(task, limit=data.get("knowledge_limit", 8))
+            project_id = data.get("project_id")
+            rtl_evidence = data.get("rtl_evidence") or {}
+            # Expand short generic questions (for example "what are the risks?")
+            # with identifiers from the active DUT so retrieval remains project-aware.
+            feature_data = rtl_evidence.get("feature_analysis", {})
+            feature_items = feature_data.get("features", []) if isinstance(feature_data, dict) else []
+            feature_names = [x.get("feature", "") for x in feature_items if isinstance(x, dict)]
+            ports = rtl_evidence.get("ports", [])
+            port_names = [x.get("name", "") for x in ports if isinstance(x, dict)]
+            retrieval_query = " ".join([task, str(rtl_evidence.get("dut_top", "")),
+                " ".join(rtl_evidence.get("all_module_names", [])),
+                " ".join(feature_names), " ".join(port_names)])
+            retrieved = KNOWLEDGE.search(retrieval_query, limit=data.get("knowledge_limit", 8), project_id=project_id)
             try:
                 client = OllamaClient(
                     base_url=data.get("ollama_url", "http://localhost:11434"),
@@ -81,13 +101,18 @@ class Handler(BaseHTTPRequestHandler):
                     timeout=int(data.get("timeout", 240)),
                 )
                 response = EngineeringReasoner(client).reason(
-                    task, data.get("rtl_evidence"), data.get("spec_evidence"),
+                    task, rtl_evidence, data.get("spec_evidence"),
                     data.get("tool_evidence"), retrieved,
+                    project_context=data.get("project_context"),
                 )
                 response["retrieved_sources"] = [
-                    {"source": item["source"], "topic": item["topic"], "score": item["score"]}
+                    {"source": item["source"], "topic": item["topic"], "score": item["score"],
+                     "lexical_score": item.get("lexical_score"), "semantic_score": item.get("semantic_score")}
                     for item in retrieved
                 ]
+                response["project_id"] = project_id
+                response["retrieval_scope"] = "project_only" if project_id else "global_legacy"
+                response["retrieval_query"] = retrieval_query
                 return _json(self, 200, response)
             except Exception as exc:
                 return _json(self, 503, {"error": str(exc)})
@@ -102,15 +127,15 @@ class Handler(BaseHTTPRequestHandler):
             if not prompt:
                 return _json(self, 400, {"error": "prompt_required"})
             retrieved = KNOWLEDGE.search(prompt, limit=data.get("knowledge_limit", 6))
-            context = "\\n\\n".join(
-                "[Source: %s | Topic: %s]\\n%s" %
+            context = "\n\n".join(
+                "[Source: %s | Topic: %s]\n%s" %
                 (item["source"], item["topic"], item["content"])
                 for item in retrieved
             )
             grounded = (
                 "Use the evidence below. Separate confirmed facts from inference. "
                 "If evidence is missing, state what is unknown. Do not invent protocol requirements."
-                "\\n\\nRETRIEVED KNOWLEDGE:\\n" + context + "\\n\\nUSER TASK:\\n" + prompt
+                "\n\nRETRIEVED KNOWLEDGE:\n" + context + "\n\nUSER TASK:\n" + prompt
             ) if context else prompt
             try:
                 model = data.get("model", "qwen2.5-coder:7b")
@@ -130,11 +155,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/knowledge/ingest":
             result = KNOWLEDGE.ingest_text(
                 data.get("source", "unknown"), data.get("text", ""),
-                data.get("topic", "unclassified"),
+                data.get("topic", "unclassified"), data.get("project_id", "__legacy__"),
             )
             return _json(self, 201, result)
         if self.path == "/knowledge/search":
-            return _json(self, 200, {"results": KNOWLEDGE.search(data.get("query", ""), data.get("limit", 8))})
+            return _json(self, 200, {"results": KNOWLEDGE.search(
+                data.get("query", ""), data.get("limit", 8), data.get("project_id")),
+                "retrieval_scope": "project_only" if data.get("project_id") else "global_legacy"})
+        if self.path == "/knowledge/project/clear":
+            project_id=data.get("project_id")
+            if not project_id: return _json(self,400,{"error":"project_id_required"})
+            return _json(self,200,KNOWLEDGE.clear_project(project_id))
+        if self.path == "/knowledge/project/status":
+            project_id=data.get("project_id")
+            if not project_id: return _json(self,400,{"error":"project_id_required"})
+            return _json(self,200,KNOWLEDGE.project_status(project_id))
         if self.path == "/learning/experience":
             try:
                 result = LEARNING.record_experience(
