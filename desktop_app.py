@@ -1,6 +1,7 @@
 """Native Mverify desktop workbench. Tkinter is used to avoid a browser runtime."""
 from __future__ import annotations
 import json, threading, traceback, urllib.request, urllib.error, hashlib
+import os, subprocess
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -13,6 +14,7 @@ from mverify.core.requirement_intelligence import apply_auto_triage
 from mverify.core.design_intelligence import build_dut_model, propose_architectures, generate_intelligence
 from mverify.core.uvm_generator import generate_uvm_project
 from mverify.core.testcase_engine import generate_testcases
+from mverify.core.simulator_backend import discover_tools, run_compile, run_simulation, waveform_info, verdi_command
 
 def _format_value(value, indent=0):
     """Render structured Mcore output as readable engineering notes."""
@@ -272,6 +274,8 @@ class MverifyDesktop(tk.Tk):
         ttk.Button(bar,text="Show architecture",command=self._show_arch).pack(side="left",padx=5)
         self.approve=tk.BooleanVar(value=False);ttk.Checkbutton(bar,text="I reviewed this topology proposal",variable=self.approve).pack(side="left",padx=5)
         ttk.Button(bar,text="Generate UVM scaffold",command=self._generate).pack(side="left",padx=5)
+        ttk.Button(bar,text="RUN VERIFICATION",command=self._run_verification).pack(side="left",padx=5)
+        ttk.Button(bar,text="Tool status",command=self._show_tool_status).pack(side="left",padx=5)
         ttk.Button(bar,text="Load simulator log",command=self._load_uvm_log).pack(side="left",padx=5)
         self.arch_text=self._text(self.uvm_tab)
     def _refresh_arch(self):
@@ -301,6 +305,51 @@ class MverifyDesktop(tk.Tk):
         self._bg("Generating UVM scaffold…",
                  lambda:generate_uvm_project(self.report,out,top,architecture=a,requirements=self.requirements),
                  done)
+
+    def _show_tool_status(self):
+        tools=discover_tools()
+        for name,item in tools.items():
+            if name in ("vcs","verdi") and item.executable:
+                from mverify.core.simulator_backend import parse_tool_version
+                item.version=parse_tool_version(item.executable)
+        self._set(self.arch_text,json.dumps({k:v.__dict__ for k,v in tools.items()},indent=2))
+        self._log("Probed local VCS, Verdi, UVM and license environment without changing license settings.")
+
+    def _run_verification(self):
+        if not self.last_uvm_output:
+            messagebox.showwarning("Generate first","Scan the DUT and generate its UVM environment first.");return
+        out=self.last_uvm_output
+        def work():
+            found=discover_tools(); vcs=found["vcs"]
+            if not vcs.executable:
+                raise RuntimeError("VCS is not available to this desktop process. Configure VCS_BIN/PATH, or run on the Linux host with the supplied setup instructions.")
+            compile_result=run_compile(vcs.executable,out/"mverify.f",out/"build",timeout=1200)
+            if compile_result["status"]!="COMPILE_PASSED":
+                return {"compile":compile_result,"simulation":None,"status":"COMPILE_FAILED"}
+            sim=run_simulation(compile_result["simulator_executable"],"wrr_test",os.environ.get("MVERIFY_SEED","random"),out/"build",timeout=3600,
+                plusargs=["+MVERIFY_SCENARIO="+os.environ.get("MVERIFY_SCENARIO","random_requests")],
+                dut_name=self.report.get("selected_top"), simulator_version=compile_result.get("simulator_version"))
+            wf=waveform_info(out/"build"/"mverify.vcd")
+            sim["waveform"]=wf
+            report_path=out/"build"/"wrr_test.result.json"
+            report_path.write_text(json.dumps({k:v for k,v in sim.items() if k!="output"},indent=2),encoding="utf-8")
+            verdi=found["verdi"]
+            launch=None
+            if sim["status"]=="SIMULATION_PASSED" and wf["valid"] and verdi.executable:
+                args=verdi_command(verdi.executable,wf["path"],out/"mverify.f")
+                try:
+                    proc=subprocess.Popen(args,cwd=str(out/"build"),env=os.environ.copy(),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                    launch={"pid":proc.pid,"command":args,"status":"launched"}
+                except OSError as exc: launch={"status":"failed","error":str(exc),"command":args}
+            return {"compile":compile_result,"simulation":sim,"waveform":wf,"verdi":launch,
+                    "status":sim["status"] if sim else compile_result["status"]}
+        def done(result):
+            display={"status":result["status"],"compile":{k:v for k,v in result["compile"].items() if k!="output"},
+                     "simulation":({k:v for k,v in result["simulation"].items() if k!="output"} if result["simulation"] else None),
+                     "waveform":result.get("waveform"),"verdi":result.get("verdi")}
+            self._set(self.arch_text,json.dumps(display,indent=2));self._log("Verification workflow ended: "+result["status"])
+            messagebox.showinfo("Verification result",result["status"]+"\nSee generated logs and structured result in "+str(out/"build"))
+        self._bg("Validating → compiling → simulating…",work,done)
 
     def _show_generated_topology(self):
         if not self.last_uvm_output:

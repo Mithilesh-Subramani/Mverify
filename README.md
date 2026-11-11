@@ -1,6 +1,8 @@
-# Mverify 0.13.0 — Universal RTL Engineering Workbench
+# Mverify 0.15.0 — Universal RTL Engineering Workbench
 
 Mverify is a local-first desktop application for RTL project discovery, evidence-based design analysis, specification review, verification planning and UVM scaffold generation. It supports general RTL projects. PCIe discovery is an optional protocol-specific extension, not the core architecture.
+
+Version 0.15.0 adds contract-gated active UVM generation for the included `pcie_wrr_arbiter`, an independent weighted round-robin reference model, a controlled VCS compile/simulation backend, evidence-based result parsing, and Verdi waveform launch after a passing simulation. Designs without a confirmed behavioral contract retain the assisted observation flow.
 
 ## Current capabilities
 

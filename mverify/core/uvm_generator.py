@@ -92,6 +92,15 @@ def generate_uvm_project(scan_report, output_dir, top_module=None, architecture=
     if not ports:
         raise ValueError("No DUT ports were parsed. Generation stopped.")
 
+    # Active stimulus is enabled only for strategies whose interface and
+    # behavioral contract have explicit evidence. Everything else follows the
+    # reviewed passive/assisted path below.
+    from .strategy_registry import select_strategy
+    strategy = select_strategy(scan_report, top)
+    if strategy.active and strategy.name == "weighted_round_robin":
+        from .wrr_uvm_generator import generate_wrr_uvm
+        return generate_wrr_uvm(scan_report, Path(output_dir).expanduser().resolve(), dut, top, strategy.to_dict())
+
     out = Path(output_dir).expanduser().resolve()
     for folder in ("interfaces", "agents", "env", "sequences", "tests", "scripts"):
         (out/folder).mkdir(parents=True, exist_ok=True)
