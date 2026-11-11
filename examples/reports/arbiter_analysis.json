@@ -1,0 +1,240 @@
+{
+  "universal_design_model": {
+    "schema": "mverify.udm.v1",
+    "project": {
+      "root": "/mnt/data/mverify_0.13.0_work/Mverify_0.13.0/examples/rtl/arbiter",
+      "selected_top": "arbiter",
+      "module_count": 1
+    },
+    "design_scope": "single_ip_or_subsystem_candidate",
+    "modules": [
+      {
+        "name": "arbiter",
+        "source_file": "/mnt/data/mverify_0.13.0_work/Mverify_0.13.0/examples/rtl/arbiter/arbiter.sv",
+        "port_style": "ANSI",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "input logic clk"
+          },
+          {
+            "name": "rst_n",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "rst_n"
+          },
+          {
+            "name": "request",
+            "direction": "input",
+            "width": "[N-1:0]",
+            "declaration": "input logic [N-1:0] request"
+          },
+          {
+            "name": "grant",
+            "direction": "output",
+            "width": "[N-1:0]",
+            "declaration": "output logic [N-1:0] grant"
+          }
+        ],
+        "port_count": 4,
+        "procedural_constructs": {
+          "always_ff": 1,
+          "always_comb": 1,
+          "always_latch": 0,
+          "legacy_always_at": 0,
+          "total_candidate_blocks": 2
+        },
+        "state_machine_candidates": [],
+        "feature_candidates": [
+          "clock_reset",
+          "arbitration"
+        ],
+        "behavioral_role_candidates": [
+          "arithmetic_or_datapath_candidate",
+          "comparison_or_control_candidate",
+          "input_output_transform_candidate"
+        ],
+        "operator_evidence": {
+          "arithmetic_operator_present": true,
+          "comparison_operator_present": true,
+          "case_statement_present": false
+        },
+        "identifier_count": 21,
+        "evidence_status": "static_source_evidence_not_elaborated_behavior"
+      }
+    ],
+    "hierarchy": {
+      "instances": [],
+      "instance_count": 0,
+      "top_candidates": [
+        "arbiter"
+      ],
+      "connectivity_status": "candidate_hierarchy_only_unless_elaborator_resolves_connections"
+    },
+    "top_interface": {
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "scalar/unspecified",
+          "declaration": "input logic clk"
+        },
+        {
+          "name": "rst_n",
+          "direction": "input",
+          "width": "scalar/unspecified",
+          "declaration": "rst_n"
+        },
+        {
+          "name": "request",
+          "direction": "input",
+          "width": "[N-1:0]",
+          "declaration": "input logic [N-1:0] request"
+        },
+        {
+          "name": "grant",
+          "direction": "output",
+          "width": "[N-1:0]",
+          "declaration": "output logic [N-1:0] grant"
+        }
+      ],
+      "port_count": 4,
+      "direction_counts": {
+        "input": 3,
+        "output": 1
+      },
+      "signal_relationship_candidates": {
+        "clock_candidates": [
+          {
+            "name": "clk",
+            "evidence": "port-name pattern",
+            "confidence": "candidate"
+          }
+        ],
+        "reset_candidates": [
+          {
+            "name": "rst_n",
+            "evidence": "port-name pattern",
+            "confidence": "candidate"
+          }
+        ],
+        "handshake_candidates": [
+          {
+            "kind": "valid_ready",
+            "valid_candidates": [],
+            "ready_candidates": [],
+            "paired": false,
+            "evidence": "co-occurring port names; pairing not proven"
+          }
+        ],
+        "request_response_candidates": [
+          {
+            "request_candidates": [
+              "request"
+            ],
+            "response_candidates": [],
+            "evidence": "port-name pattern; protocol semantics not proven"
+          }
+        ],
+        "memory_related_ports": [],
+        "interrupt_candidates": []
+      }
+    },
+    "design_characteristics": {
+      "feature_candidates": [
+        "arbitration",
+        "clock_reset"
+      ],
+      "state_machine_candidates": [],
+      "procedural_block_count": 2,
+      "top_level_role_candidates": [
+        "arithmetic_or_datapath_candidate",
+        "comparison_or_control_candidate",
+        "input_output_transform_candidate"
+      ],
+      "sequential_logic_candidate": true,
+      "combinational_logic_candidate": true
+    },
+    "evidence_policy": {
+      "confirmed": "Only parser-observed declarations and source constructs are confirmed as source evidence.",
+      "inferred": "Signal roles, clocks, resets, interfaces and block functions are candidates, not proven semantics.",
+      "unknown": "Resolved connectivity, elaborated parameter values, complete dataflow, CDC safety and functional behavior require stronger tools or review."
+    },
+    "analysis_limits": [
+      "The current frontend is a lightweight Verilog/SystemVerilog parser, not a complete IEEE SystemVerilog elaborator.",
+      "Port-name patterns are candidate evidence and do not prove protocol or clock/reset semantics.",
+      "Instance hierarchy does not prove resolved port-to-expression connectivity.",
+      "VHDL files may be inventoried, but VHDL semantic parsing is not implemented in this release.",
+      "No functional correctness, timing closure, CDC safety or specification compliance is proven."
+    ]
+  },
+  "adaptive_verification_plan": {
+    "schema": "mverify.adaptive_plan.v1",
+    "dut_top": "arbiter",
+    "architecture": "sequential_or_interface_block",
+    "architecture_rationale": "Sequential or resource/interface behavior is indicated. Use the smallest environment that covers the observed boundary.",
+    "topology_recommendation": [
+      "passive interface monitor",
+      "driver/sequencer only after contract review",
+      "independent reference model",
+      "scoreboard",
+      "reset/state assertions",
+      "functional coverage"
+    ],
+    "candidate_tests": [
+      {
+        "id": "reset_initialization",
+        "purpose": "Check reset assertion, release and initial observable state.",
+        "oracle_needed": "Confirmed reset polarity, synchrony and reset values.",
+        "basis": "Sequential logic candidate",
+        "status": "plan_only_not_executable"
+      },
+      {
+        "id": "state_transition",
+        "purpose": "Exercise legal and boundary state transitions.",
+        "oracle_needed": "Approved state-transition model or requirement-derived expectations.",
+        "basis": "State/procedural evidence",
+        "status": "plan_only_not_executable"
+      },
+      {
+        "id": "contention_fairness",
+        "purpose": "Exercise simultaneous requesters, priority and starvation boundaries.",
+        "oracle_needed": "Approved arbitration policy and fairness definition.",
+        "basis": "Arbitration feature candidate",
+        "status": "plan_only_not_executable"
+      }
+    ],
+    "generation_gates": {
+      "passive_monitor": "may_generate_from_parsed_port_declarations",
+      "active_driver": "blocked_until_clock_reset_and_interface_contract_are_reviewed",
+      "sequence": "blocked_until_transaction_fields_constraints_and_legal_timing_are_defined",
+      "reference_model": "blocked_until_expected_behavior_is independently_defined_or_requirement_approved",
+      "scoreboard": "may_generate_shell_only_until_independent_oracle_is_available",
+      "assertions": "generate only from confirmed temporal and reset semantics",
+      "coverage": "candidate coverpoints may be proposed; bins require reviewed semantic meaning"
+    },
+    "evidence": {
+      "feature_candidates": [
+        "arbitration",
+        "clock_reset"
+      ],
+      "sequential_logic_candidate": true,
+      "hierarchy_instance_count": 0,
+      "top_port_count": 4,
+      "design_scope_candidate": "single_ip_or_subsystem_candidate",
+      "top_roles": [
+        "arithmetic_or_datapath_candidate",
+        "comparison_or_control_candidate",
+        "input_output_transform_candidate"
+      ]
+    },
+    "unknowns_and_review_items": [
+      "Static source evidence does not establish functional behavior.",
+      "No active stimulus is authorized by signal names alone.",
+      "Compile and simulation results are not available from this planning step."
+    ],
+    "status": "adaptive_plan_generated_not_functionally_verified"
+  }
+}

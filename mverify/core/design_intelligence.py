@@ -2,6 +2,8 @@
 from __future__ import annotations
 import json, re, urllib.request, urllib.error
 from collections import defaultdict
+from .universal_design_model import build_universal_design_model
+from .adaptive_verification import plan_adaptive_verification
 
 SIGNAL_GROUPS = {
     "clock_reset": [r"clk", r"clock", r"rst", r"reset"],
@@ -53,7 +55,15 @@ def build_dut_model(report, mapped_requirements=None, spec_revision=''):
         interfaces.append({'id':group,'name':group.replace('_',' ').title(),'signals':ps,'dut_inputs':ins,'dut_outputs':outs,
             'driver_candidate':bool(ins),'monitor_candidate':bool(outs),
             'confidence':'medium' if group!='unclassified' else 'low'})
+    udm = report.get("universal_design_model") or build_universal_design_model(
+        report.get("_module_details_with_bodies", report.get("module_details", [])),
+        hierarchy, report.get("semantic_analysis", {}), report.get("feature_analysis", {}),
+        top.get("name"), report.get("project_dir", "")
+    )
+    adaptive_plan = report.get("adaptive_verification_plan") or plan_adaptive_verification(udm)
     return {
+      'universal_design_model': udm,
+      'adaptive_verification_plan': adaptive_plan,
       'dut_top':top.get('name','unknown'),'source_file':top.get('source_file',''),
       'port_count':len(ports),'ports':ports,'interface_candidates':interfaces,
       'hierarchy':{'direct_children':children,'child_count':len(children)},
@@ -187,7 +197,7 @@ def generate_intelligence(model, architectures, requirements, ollama_enabled=Fal
       'dut':model['dut_top'],'ports':model['port_count'],'features':features,
       'interfaces':[{'id':g['id'],'inputs':g['dut_inputs'],'outputs':g['dut_outputs']} for g in groups],
       'direct_children':[e.get('child') for e in model['hierarchy']['direct_children']],
-      'fsm':fsm,'requirements':[{'id':r.get('requirement_id'),'statement':r.get('statement'),'status':r.get('mapping_status')} for r in requirements]
+      'fsm':fsm,'universal_design_model':model.get('universal_design_model',{}),'adaptive_verification_plan':model.get('adaptive_verification_plan',{}),'requirements':[{'id':r.get('requirement_id'),'statement':r.get('statement'),'status':r.get('mapping_status')} for r in requirements]
     }
     result={'dut_specific_findings':[], 'architecture_recommendation':None,'alternatives':architectures,
       'verification_gaps':model['analysis_gaps'],'evidence_snapshot':evidence,'reasoning_engine':'deterministic evidence analysis',

@@ -1,0 +1,296 @@
+{
+  "universal_design_model": {
+    "schema": "mverify.udm.v1",
+    "project": {
+      "root": "/mnt/data/mverify_0.13.0_work/Mverify_0.13.0/examples/rtl/subsystem",
+      "selected_top": "subsystem",
+      "module_count": 2
+    },
+    "design_scope": "single_ip_or_subsystem_candidate",
+    "modules": [
+      {
+        "name": "register_bank",
+        "source_file": "/mnt/data/mverify_0.13.0_work/Mverify_0.13.0/examples/rtl/subsystem/subsystem.sv",
+        "port_style": "ANSI",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "input logic clk"
+          },
+          {
+            "name": "rst_n",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "rst_n"
+          },
+          {
+            "name": "wr_en",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "input logic wr_en"
+          },
+          {
+            "name": "wr_data",
+            "direction": "input",
+            "width": "[7:0]",
+            "declaration": "input logic [7:0] wr_data"
+          },
+          {
+            "name": "rd_data",
+            "direction": "output",
+            "width": "[7:0]",
+            "declaration": "output logic [7:0] rd_data"
+          }
+        ],
+        "port_count": 5,
+        "procedural_constructs": {
+          "always_ff": 1,
+          "always_comb": 0,
+          "always_latch": 0,
+          "legacy_always_at": 0,
+          "total_candidate_blocks": 1
+        },
+        "state_machine_candidates": [],
+        "feature_candidates": [
+          "clock_reset",
+          "data_path"
+        ],
+        "behavioral_role_candidates": [
+          "comparison_or_control_candidate",
+          "input_output_transform_candidate"
+        ],
+        "operator_evidence": {
+          "arithmetic_operator_present": false,
+          "comparison_operator_present": true,
+          "case_statement_present": false
+        },
+        "identifier_count": 14,
+        "evidence_status": "static_source_evidence_not_elaborated_behavior"
+      },
+      {
+        "name": "subsystem",
+        "source_file": "/mnt/data/mverify_0.13.0_work/Mverify_0.13.0/examples/rtl/subsystem/subsystem.sv",
+        "port_style": "ANSI",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "input logic clk"
+          },
+          {
+            "name": "rst_n",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "rst_n"
+          },
+          {
+            "name": "wr_en",
+            "direction": "input",
+            "width": "scalar/unspecified",
+            "declaration": "input logic wr_en"
+          },
+          {
+            "name": "wr_data",
+            "direction": "input",
+            "width": "[7:0]",
+            "declaration": "input logic [7:0] wr_data"
+          },
+          {
+            "name": "rd_data",
+            "direction": "output",
+            "width": "[7:0]",
+            "declaration": "output logic [7:0] rd_data"
+          }
+        ],
+        "port_count": 5,
+        "procedural_constructs": {
+          "always_ff": 0,
+          "always_comb": 0,
+          "always_latch": 0,
+          "legacy_always_at": 0,
+          "total_candidate_blocks": 0
+        },
+        "state_machine_candidates": [],
+        "feature_candidates": [
+          "clock_reset"
+        ],
+        "behavioral_role_candidates": [
+          "input_output_transform_candidate"
+        ],
+        "operator_evidence": {
+          "arithmetic_operator_present": false,
+          "comparison_operator_present": false,
+          "case_statement_present": false
+        },
+        "identifier_count": 7,
+        "evidence_status": "static_source_evidence_not_elaborated_behavior"
+      }
+    ],
+    "hierarchy": {
+      "instances": [
+        {
+          "parent": "subsystem",
+          "child": "register_bank",
+          "instance": "u_regs"
+        }
+      ],
+      "instance_count": 1,
+      "top_candidates": [
+        "subsystem"
+      ],
+      "connectivity_status": "candidate_hierarchy_only_unless_elaborator_resolves_connections"
+    },
+    "top_interface": {
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "scalar/unspecified",
+          "declaration": "input logic clk"
+        },
+        {
+          "name": "rst_n",
+          "direction": "input",
+          "width": "scalar/unspecified",
+          "declaration": "rst_n"
+        },
+        {
+          "name": "wr_en",
+          "direction": "input",
+          "width": "scalar/unspecified",
+          "declaration": "input logic wr_en"
+        },
+        {
+          "name": "wr_data",
+          "direction": "input",
+          "width": "[7:0]",
+          "declaration": "input logic [7:0] wr_data"
+        },
+        {
+          "name": "rd_data",
+          "direction": "output",
+          "width": "[7:0]",
+          "declaration": "output logic [7:0] rd_data"
+        }
+      ],
+      "port_count": 5,
+      "direction_counts": {
+        "input": 4,
+        "output": 1
+      },
+      "signal_relationship_candidates": {
+        "clock_candidates": [
+          {
+            "name": "clk",
+            "evidence": "port-name pattern",
+            "confidence": "candidate"
+          }
+        ],
+        "reset_candidates": [
+          {
+            "name": "rst_n",
+            "evidence": "port-name pattern",
+            "confidence": "candidate"
+          }
+        ],
+        "handshake_candidates": [
+          {
+            "kind": "valid_ready",
+            "valid_candidates": [],
+            "ready_candidates": [],
+            "paired": false,
+            "evidence": "co-occurring port names; pairing not proven"
+          }
+        ],
+        "request_response_candidates": [
+          {
+            "request_candidates": [],
+            "response_candidates": [],
+            "evidence": "port-name pattern; protocol semantics not proven"
+          }
+        ],
+        "memory_related_ports": [],
+        "interrupt_candidates": []
+      }
+    },
+    "design_characteristics": {
+      "feature_candidates": [
+        "clock_reset",
+        "data_path"
+      ],
+      "state_machine_candidates": [],
+      "procedural_block_count": 0,
+      "top_level_role_candidates": [
+        "input_output_transform_candidate"
+      ],
+      "sequential_logic_candidate": false,
+      "combinational_logic_candidate": false
+    },
+    "evidence_policy": {
+      "confirmed": "Only parser-observed declarations and source constructs are confirmed as source evidence.",
+      "inferred": "Signal roles, clocks, resets, interfaces and block functions are candidates, not proven semantics.",
+      "unknown": "Resolved connectivity, elaborated parameter values, complete dataflow, CDC safety and functional behavior require stronger tools or review."
+    },
+    "analysis_limits": [
+      "The current frontend is a lightweight Verilog/SystemVerilog parser, not a complete IEEE SystemVerilog elaborator.",
+      "Port-name patterns are candidate evidence and do not prove protocol or clock/reset semantics.",
+      "Instance hierarchy does not prove resolved port-to-expression connectivity.",
+      "VHDL files may be inventoried, but VHDL semantic parsing is not implemented in this release.",
+      "No functional correctness, timing closure, CDC safety or specification compliance is proven."
+    ]
+  },
+  "adaptive_verification_plan": {
+    "schema": "mverify.adaptive_plan.v1",
+    "dut_top": "subsystem",
+    "architecture": "subsystem_or_soc",
+    "architecture_rationale": "The design has multi-module or multi-feature evidence. Partition verification by confirmed subsystem boundaries; do not create one agent per internal module automatically.",
+    "topology_recommendation": [
+      "one agent per confirmed external interface",
+      "per-IP monitors where observability exists",
+      "memory/peripheral models only when interface contracts are known",
+      "virtual-sequence coordinator when cross-interface scenarios are required",
+      "subsystem scoreboards and assertions",
+      "integration coverage"
+    ],
+    "candidate_tests": [
+      {
+        "id": "subsystem_boundary_interactions",
+        "purpose": "Identify and exercise externally observable interactions across confirmed child-IP boundaries.",
+        "oracle_needed": "Resolved connectivity, interface contracts, address/interrupt relationships where applicable, and independent subsystem expectations.",
+        "basis": "Multi-module hierarchy candidate; child-instance connectivity is not yet proven.",
+        "status": "plan_only_not_executable"
+      }
+    ],
+    "generation_gates": {
+      "passive_monitor": "may_generate_from_parsed_port_declarations",
+      "active_driver": "blocked_until_clock_reset_and_interface_contract_are_reviewed",
+      "sequence": "blocked_until_transaction_fields_constraints_and_legal_timing_are_defined",
+      "reference_model": "blocked_until_expected_behavior_is independently_defined_or_requirement_approved",
+      "scoreboard": "may_generate_shell_only_until_independent_oracle_is_available",
+      "assertions": "generate only from confirmed temporal and reset semantics",
+      "coverage": "candidate coverpoints may be proposed; bins require reviewed semantic meaning"
+    },
+    "evidence": {
+      "feature_candidates": [
+        "clock_reset",
+        "data_path"
+      ],
+      "sequential_logic_candidate": false,
+      "hierarchy_instance_count": 1,
+      "top_port_count": 5,
+      "design_scope_candidate": "single_ip_or_subsystem_candidate",
+      "top_roles": [
+        "input_output_transform_candidate"
+      ]
+    },
+    "unknowns_and_review_items": [
+      "Static source evidence does not establish functional behavior.",
+      "No active stimulus is authorized by signal names alone.",
+      "Compile and simulation results are not available from this planning step."
+    ],
+    "status": "adaptive_plan_generated_not_functionally_verified"
+  }
+}

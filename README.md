@@ -1,15 +1,18 @@
-# Mverify 0.12.1 — RTL Engineering Workbench
+# Mverify 0.13.0 — Universal RTL Engineering Workbench
 
 Mverify is a local-first desktop application for RTL project discovery, evidence-based design analysis, specification review, verification planning and UVM scaffold generation. It supports general RTL projects. PCIe discovery is an optional protocol-specific extension, not the core architecture.
 
 ## Current capabilities
 
 - Native desktop GUI with project explorer, source preview, scan metrics, analysis, topology, specification, verification planning and UVM generation views.
+- Protocol-neutral Universal Design Model (UDM) and adaptive verification planning, integrated into scan results and the desktop Analysis view.
 - Project inventory for Verilog/SystemVerilog, VHDL, filelists, timing constraints, EDA project metadata, Tcl scripts, documentation and support files.
 - Verilog/SystemVerilog lightweight structural parsing, candidate module hierarchy, top candidates, port declarations and lexical semantic evidence.
 - `.f` filelist handling for common include-directory, macro, nested-filelist and source entries.
 - Optional Surelog invocation when installed. Tool availability is reported instead of being assumed.
 - Feature detection and requirement-to-RTL mapping. Findings retain their evidence and limitations.
+- Universal Design Model (UDM): a protocol-neutral intermediate representation for modules, ports, hierarchy, feature candidates, procedural constructs, state candidates, and interface signal candidates.
+- Adaptive verification planner: proposes different strategies for combinational blocks, sequential/interface blocks, and multi-module subsystem/SoC candidates. Plans include test intents, evidence, unknowns, and explicit generation gates.
 - Verification scenario catalog and passive UVM 1.2 scaffold generation.
 - Generated top-level virtual interface, all-port passive monitor, scoreboard connection, selectable observation test stubs and runtime topology print.
 - Desktop UVM topology preview and simulator-log import.
@@ -19,7 +22,7 @@ Mverify is a local-first desktop application for RTL project discovery, evidence
 
 ## Important analysis boundaries
 
-The lightweight parser is not a complete SystemVerilog or VHDL compiler. Project inventory can discover VHDL and other EDA inputs, but VHDL semantic parsing is not implemented in this release. The hierarchy and port topology are candidate evidence. They do not prove resolved instance-to-port connectivity, unique drivers, CDC safety, timing closure or functional correctness.
+The lightweight parser is not a complete SystemVerilog or VHDL compiler. The UDM is an evidence-labelled first-pass model, not a resolved elaborated netlist. It does not yet provide complete AST-based dataflow, resolved port-to-expression connectivity, full clock-domain analysis, or general VHDL semantics. Project inventory can discover VHDL and other EDA inputs, but VHDL semantic parsing is not implemented in this release. The hierarchy and port topology are candidate evidence. They do not prove resolved instance-to-port connectivity, unique drivers, CDC safety, timing closure or functional correctness.
 
 Surelog is optional. A successful Surelog parse/elaboration process is not simulation. The current UVM generator is a passive scaffold. It maps parsed top-level ports and samples them. It does not drive DUT inputs. Generated scenario tests are observation stubs, not protocol-functional tests. The sequence template is not compiled. Active stimulus requires reviewed signal semantics, reset behavior, timing and protocol mapping. Functional scoreboarding requires an independent requirement-derived reference model.
 
@@ -46,7 +49,7 @@ Or use `bash run_mverify.sh`.
 
 Mverify checks for `surelog`, `slang`, `yosys`, `iverilog`, `verilator`, `vcs`, `vsim`, `verdi`, `gtkwave` and `ollama` on `PATH`. Missing tools do not prevent basic inventory and lightweight parsing.
 
-For local Ollama assistance, start Ollama separately and select an installed model in the Verification Plan view. The default model is `qwen2.5-coder:14b`; change it to a model that is installed on your machine.
+For local Ollama assistance, start Ollama separately and select an installed model in the Mcore view. The default model is `qwen2.5-coder:14b`; change it to a model that is installed on your machine.
 
 ## Repository layout
 
@@ -92,3 +95,15 @@ See `KNOWN_LIMITATIONS_v0.12.1.md` and `CHANGELOG_v0.12.1.md` for release bounda
 ## Mcore retrieval in 0.12.3
 
 Mcore retrieval is scoped to the active project. Ask Mcore automatically retrieves current-project evidence. Hybrid lexical/vector retrieval is enabled when Ollama `nomic-embed-text` is installed; otherwise it uses lexical fallback. Re-index after RTL changes. See `README_MCORE_INTEGRATION.md`.
+
+
+## Version 0.13.0 — Universal RTL foundation
+
+- Added a protocol-neutral Universal Design Model (UDM) schema.
+- Added a deterministic adaptive verification planner with distinct plans for combinational datapaths, sequential/interface blocks, and larger multi-module designs.
+- Added evidence and uncertainty labels for clocks, resets, handshakes, memory-related ports, interrupts, state-machine candidates, and behavioral-role candidates.
+- Added tests that compare ALU, FIFO, arbiter, and small subsystem designs.
+- The current UVM generator remains a passive observation scaffold. The adaptive plan does not yet generate functional drivers, sequences, independent reference models, assertions, or coverage automatically. Those require the next implementation milestones and stronger RTL semantic analysis.
+- No SoC-wide functional verification, formal proof, CDC signoff, or VHDL semantic verification is claimed.
+
+See `UNIVERSAL_RTL_ARCHITECTURE.md` and `KNOWN_LIMITATIONS_v0.13.0.md`.

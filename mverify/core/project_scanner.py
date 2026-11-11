@@ -11,6 +11,8 @@ from .sv_frontend import run_surelog, build_design_graph
 from .project_inventory import inventory_project
 from .topology import build_topology
 from .tool_probe import probe_tools
+from .universal_design_model import build_universal_design_model
+from .adaptive_verification import plan_adaptive_verification
 
 LOG = logging.getLogger(__name__)
 RTL_SUFFIXES = {".v", ".vh", ".sv", ".svh"}
@@ -157,6 +159,13 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     report["architecture_discovery"] = discover_pcie(report)
     report["feature_analysis"] = feature_report
     report["semantic_analysis"] = analyze_semantics(module_details, edges)
+    # Universal, protocol-neutral intermediate representation. Keep parser-only
+    # module bodies available for this pass, then remove them from the public report.
+    report["universal_design_model"] = build_universal_design_model(
+        module_details, edges, report["semantic_analysis"], feature_report,
+        selected_top, str(project_dir)
+    )
+    report["adaptive_verification_plan"] = plan_adaptive_verification(report["universal_design_model"])
     report["design_graph"] = build_design_graph(report)
     report["elaboration"] = run_surelog(project_dir, build_inputs, selected_top)
     report["project_inventory"] = inventory_project(project_dir)

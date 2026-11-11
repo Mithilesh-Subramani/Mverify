@@ -176,7 +176,7 @@ class MverifyDesktop(tk.Tk):
             for k,v in (("files",self.report.get("project_inventory",{}).get("total_files",summary.get("rtl_files",0))),("modules",summary.get("modules",0)),("instances",summary.get("hierarchy_instances",0)),("warnings",summary.get("warnings",0))):self.metric_labels[k].configure(text=str(v))
             self.top_var.set(self.report.get("selected_top") or (self.report.get("top_candidates") or [""])[0])
             self._populate_tree(path)
-            self._set(self.scan_text,json.dumps({k:self.report.get(k) for k in ("project_dir","summary","project_inventory","build_inputs","source_selection","module_details","hierarchy","top_candidates","selected_top","warnings","elaboration","toolchain","analysis_scope")},indent=2))
+            self._set(self.scan_text,json.dumps({k:self.report.get(k) for k in ("project_dir","summary","project_inventory","build_inputs","source_selection","module_details","hierarchy","top_candidates","selected_top","warnings","elaboration","toolchain","analysis_scope","universal_design_model","adaptive_verification_plan")},indent=2))
             self._set(self.topology_text,json.dumps(self.report.get("topology",{}),indent=2))
             self._log(f"Scan {sid} complete: {summary.get('rtl_files',0)} RTL files, {summary.get('modules',0)} modules.")
             self.tabs.select(self.analysis_tab)
@@ -448,6 +448,8 @@ class MverifyDesktop(tk.Tk):
                 "project_summary":self.report.get("summary",{}),
                 "feature_analysis":self.report.get("feature_analysis",{}),
                 "semantic_analysis":self.report.get("semantic_analysis",{}),
+                "universal_design_model":self.report.get("universal_design_model",{}),
+                "adaptive_verification_plan":self.report.get("adaptive_verification_plan",{}),
                 "analysis_scope":self.report.get("analysis_scope",{}),
                 "source_files":self.report.get("files",[]),
             }

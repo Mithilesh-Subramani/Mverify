@@ -30,3 +30,9 @@ The current RAG retriever uses lexical term-frequency matching over SQLite chunk
 It does not use vector embeddings or a reranker. `Ask Mcore` also requires Ollama
 and an installed model. If the API is not running, the GUI reports the connection
 error. Mcore is optional; RTL scanning and UVM generation work without it.
+
+## Universal RTL analysis in 0.13.0
+
+After **Scan design**, open **Analysis** to inspect `universal_design_model` and `adaptive_verification_plan`. These are protocol-neutral evidence models. The planner should choose a compact combinational plan for an ALU, a sequential/interface plan for a FIFO or controller, and a subsystem/SoC candidate for sufficiently large hierarchy. It deliberately does not authorize active stimulus from names alone.
+
+Example RTL is in `examples/rtl/` (one project per subdirectory). These examples are parser/planner regression fixtures, not production IP or golden verification models.
