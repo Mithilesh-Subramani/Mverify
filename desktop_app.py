@@ -8,6 +8,7 @@ from tkinter import ttk, filedialog, messagebox
 from mverify.core.config import load_config
 from mverify.core.logging_setup import configure_logging
 from mverify.core.project_scanner import scan_project
+from mverify.core.rtl_parser import parse_rtl_file
 from mverify.storage.database import initialize_database, save_scan
 from mverify.core.spec_engine import extract_spec_text, extract_candidate_requirements, load_requirements_csv, map_requirements
 from mverify.core.requirement_intelligence import apply_auto_triage
@@ -50,6 +51,8 @@ def format_mcore_response(data, raw=False):
         for i,item in enumerate(results,1):
             lines += [f"\n{i}. {item.get('topic','Evidence')}",f"   Source: {item.get('source','unknown')}",
                       f"   Relevance score: {item.get('score','n/a')}",
+                      f"   Retrieval: {item.get('retrieval_method','unknown')} | lexical={item.get('lexical_score','n/a')} | semantic={item.get('semantic_score','n/a')}",
+                      f"   Project: {item.get('project_id','unknown')}",
                       "   Evidence:", "   "+str(item.get("content","")).replace("\n","\n   ")]
         return "\n".join(lines)
     result=data.get("result",data)
@@ -67,6 +70,10 @@ def format_mcore_response(data, raw=False):
         if confidence:lines += ["\nCONFIDENCE",_format_value(confidence,1)]
         if data.get("retrieved_sources"):
             lines += ["\nRETRIEVED SOURCES",_format_value(data["retrieved_sources"],1)]
+        if data.get("claim_validation"):
+            lines += ["\nCLAIM VALIDATION",_format_value(data["claim_validation"],1)]
+        if data.get("evidence_context"):
+            lines += ["\nEVIDENCE REFERENCES",_format_value(data["evidence_context"],1)]
         lines += ["\nVALIDATION NOTE",str(data.get("validation_status","Review all claims against source RTL and specification."))]
         return "\n".join(lines)
     return _format_value(data)
@@ -255,7 +262,7 @@ class MverifyDesktop(tk.Tk):
         bar=ttk.Frame(self.intel_tab);bar.pack(fill="x")
         ttk.Label(bar,text="Specification revision").pack(side="left");self.revision=tk.StringVar();ttk.Entry(bar,textvariable=self.revision,width=24).pack(side="left",padx=5)
         self.ollama=tk.BooleanVar(value=True);ttk.Checkbutton(bar,text="Use local Ollama",variable=self.ollama).pack(side="left",padx=5)
-        self.model_name=tk.StringVar(value="qwen2.5-coder:14b");ttk.Entry(bar,textvariable=self.model_name,width=22).pack(side="left",padx=5)
+        self.model_name=tk.StringVar(value=os.environ.get("MCORE_MODEL",os.environ.get("OLLAMA_MODEL","qwen2.5-coder:14b")));ttk.Entry(bar,textvariable=self.model_name,width=22).pack(side="left",padx=5)
         ttk.Button(bar,text="Analyze DUT",command=self._analyze).pack(side="left",padx=6)
         self.intel_text=self._text(self.intel_tab)
     def _analyze(self):
@@ -263,10 +270,29 @@ class MverifyDesktop(tk.Tk):
         req=getattr(self,"mapped",[])
         def work():
             model=build_dut_model(self.report,req,self.revision.get()); arch=propose_architectures(model)
-            intel=generate_intelligence(model,arch,req,self.ollama.get(),self.model_name.get());return model,arch,intel
+            intel={"status":"MCORE_DISABLED","message":"Enable model assistance to request Mcore engineering reasoning."}
+            if self.ollama.get():
+                try:
+                    project_id=self._project_id()
+                    top=self.report.get("selected_top")
+                    modules=self.report.get("module_details",[])
+                    dut=next((m for m in modules if m.get("name")==top),{})
+                    result=self._mcore_request("/reason/engineering",{
+                        "task":"Analyze this DUT and propose evidence-grounded verification approaches. Clearly separate confirmed facts, inferences, assumptions, unknowns and recommendations.",
+                        "project_id":project_id,
+                        "project_context":{"project_dir":self.report.get("project_dir"),"project_id":project_id,"dut_top":top},
+                        "rtl_evidence":{"dut_model":model,"selected_module":dut,"universal_design_model":self.report.get("universal_design_model",{}),
+                            "analysis_scope":self.report.get("analysis_scope",{}),"source_files":self.report.get("files",[])},
+                        "spec_evidence":req,"tool_evidence":self.report.get("toolchain",{}),
+                        "model":self.model_name.get().strip() or "qwen2.5-coder:14b"},timeout=360)
+                    intel={"status":"MCORE_RESPONSE","response":result}
+                except Exception as exc:
+                    intel={"status":"MCORE_UNAVAILABLE","error":str(exc),
+                        "message":"The deterministic DUT model and candidate architectures are available; model reasoning was not produced."}
+            return model,arch,intel
         def done(data):
             self.model,self.architectures,self.intelligence=data;self._set(self.intel_text,json.dumps({"dut_model":self.model,"intelligence":self.intelligence},indent=2));self._refresh_arch()
-            self._log("DUT-specific verification intelligence completed.")
+            self._log("DUT model and candidate architectures completed; Mcore status is shown in the analysis result.")
         self._bg("Analyzing DUT…",work,done)
     def _build_uvm(self):
         bar=ttk.Frame(self.uvm_tab);bar.pack(fill="x")
@@ -392,12 +418,13 @@ class MverifyDesktop(tk.Tk):
     def _build_mcore(self):
         bar=ttk.Frame(self.mcore_tab);bar.pack(fill="x")
         ttk.Label(bar,text="Mcore API").pack(side="left")
-        self.mcore_url=tk.StringVar(value="http://127.0.0.1:8765")
+        self.mcore_url=tk.StringVar(value=os.environ.get("MCORE_API_URL","http://127.0.0.1:8765/api/v1"))
         ttk.Entry(bar,textvariable=self.mcore_url,width=34).pack(side="left",padx=5)
         ttk.Button(bar,text="Check service",command=self._check_mcore).pack(side="left")
+        ttk.Button(bar,text="Model status",command=self._check_mcore_models).pack(side="left",padx=5)
         ttk.Button(bar,text="Index RTL into RAG",command=self._index_rag).pack(side="left",padx=5)
         ttk.Label(self.mcore_tab,text="Ollama model").pack(anchor="w",pady=(8,2))
-        self.mcore_model=tk.StringVar(value="qwen2.5-coder:14b")
+        self.mcore_model=tk.StringVar(value=os.environ.get("MCORE_MODEL",os.environ.get("OLLAMA_MODEL","qwen2.5-coder:14b")))
         ttk.Entry(self.mcore_tab,textvariable=self.mcore_model,width=28).pack(anchor="w")
         ttk.Label(self.mcore_tab,text="RAG query").pack(anchor="w",pady=(8,2))
         querybar=ttk.Frame(self.mcore_tab);querybar.pack(fill="x")
@@ -405,7 +432,7 @@ class MverifyDesktop(tk.Tk):
         ttk.Entry(querybar,textvariable=self.rag_query).pack(side="left",fill="x",expand=True)
         ttk.Button(querybar,text="Search RAG",command=self._search_rag).pack(side="left",padx=5)
         ttk.Button(querybar,text="Ask Mcore",command=self._ask_mcore).pack(side="left")
-        ttk.Label(self.mcore_tab,text="Ask Mcore automatically retrieves evidence from the active project only. Hybrid vector + lexical retrieval is used when the Ollama embedding model is available; otherwise it falls back to lexical search. Search RAG is a retrieval diagnostic. Verify all conclusions against RTL and specifications.",style="Muted.TLabel").pack(anchor="w",pady=8)
+        ttk.Label(self.mcore_tab,text="Mcore answers are project-scoped and show evidence IDs with source provenance. Missing models are reported; no model fallback is selected silently.",style="Muted.TLabel").pack(anchor="w",pady=8)
         self.mcore_text=self._text(self.mcore_tab)
 
     def _mcore_request(self, endpoint, payload=None, timeout=30):
@@ -422,6 +449,11 @@ class MverifyDesktop(tk.Tk):
             self._set(self.mcore_text,json.dumps(data,indent=2))
             self._log("Mcore service connected.")
         self._bg("Checking Mcore…",work,done)
+
+    def _check_mcore_models(self):
+        self._bg("Checking configured local models…",
+            lambda:self._mcore_request("/models",timeout=20),
+            lambda d:(self._set(self.mcore_text,json.dumps(d,indent=2)),self._log("Model status returned by Mcore; no fallback was selected.")))
 
     def _project_id(self):
         root=str(Path(self.report.get("project_dir", "")).expanduser().resolve())
@@ -444,8 +476,18 @@ class MverifyDesktop(tk.Tk):
                     continue
                 if not content.strip():
                     continue
-                payload={"source":str(path),"topic":"rtl_source","text":content[:2_000_000],"project_id":project_id}
-                results.append({"file":str(path),"result":self._mcore_request("/knowledge/ingest",payload,timeout=30)})
+                source_hash=hashlib.sha256(content.encode("utf-8",errors="replace")).hexdigest()
+                modules,_=parse_rtl_file(path)
+                targets=modules or [{"name":None,"body":content,"source_line_start":1}]
+                for module in targets:
+                    body=module.get("body",content)
+                    line_start=module.get("source_line_start",1)
+                    text=(f"module={module.get('name') or 'unparsed'}\nsource={path}\n"+body)[:2_000_000]
+                    payload={"source":str(path),"topic":"rtl_source","text":text,"project_id":project_id,
+                        "module":module.get("name"),"source_sha256":source_hash,"line_start":line_start,
+                        "line_end":line_start+body.count("\n")}
+                    results.append({"file":str(path),"module":module.get("name"),
+                        "result":self._mcore_request("/knowledge/ingest",payload,timeout=30)})
             status=self._mcore_request("/knowledge/project/status",{"project_id":project_id},timeout=15)
             return {"indexed_files":len(results),"results":results,"project_status":status,
                     "note":"Project-scoped hybrid retrieval. Vector embeddings are used when the configured Ollama embedding model is available; otherwise lexical retrieval is used."}

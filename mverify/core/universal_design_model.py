@@ -6,8 +6,10 @@ never claims full elaboration or functional proof. VHDL inventory is retained
 by the project scanner, but VHDL semantic extraction is not implemented here.
 """
 from __future__ import annotations
+import hashlib
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 IDENT = r"[A-Za-z_$][A-Za-z0-9_$]*"
@@ -25,12 +27,12 @@ def _signals(body: str, ports: list[dict[str, Any]]) -> dict[str, Any]:
     memory = [n for n in names if re.search(r"mem|ram|rom|fifo|queue|buffer|addr|wdata|rdata", low[n])]
     interrupts = [n for n in names if re.search(r"irq|interrupt", low[n])]
     return {
-        "clock_candidates": [{"name": n, "evidence": "port-name pattern", "confidence": "candidate"} for n in clocks],
-        "reset_candidates": [{"name": n, "evidence": "port-name pattern", "confidence": "candidate"} for n in resets],
+        "clock_candidates": [{"name": n, "evidence": "port-name pattern", "confidence": "candidate", "classification":"INFERRED_FROM_NAMING"} for n in clocks],
+        "reset_candidates": [{"name": n, "evidence": "port-name pattern", "confidence": "candidate", "classification":"INFERRED_FROM_NAMING"} for n in resets],
         "handshake_candidates": [{"kind": "valid_ready", "valid_candidates": valid, "ready_candidates": ready,
-                                  "paired": bool(valid and ready), "evidence": "co-occurring port names; pairing not proven"}],
+                                  "paired": bool(valid and ready), "evidence": "co-occurring port names; pairing not proven", "classification":"INFERRED_FROM_NAMING"}],
         "request_response_candidates": [{"request_candidates": req, "response_candidates": rsp,
-                                          "evidence": "port-name pattern; protocol semantics not proven"}],
+                                          "evidence": "port-name pattern; protocol semantics not proven", "classification":"INFERRED_FROM_NAMING"}],
         "memory_related_ports": memory,
         "interrupt_candidates": interrupts,
     }
@@ -52,6 +54,7 @@ def _module_record(module: dict[str, Any], semantic_by: dict[str, dict[str, Any]
     always_legacy = len(re.findall(r"\balways\s*@", body))
     procedural = always_ff + always_comb + always_latch + always_legacy
     state = sem.get("state_machine_candidates", [])
+    state = [{**item,"classification":"INFERRED_FROM_RTL","evidence_source":module.get("source_file","")} for item in state]
     features = list(feature_by_module.get(name, []))
     # Remove common lexical false positives: a packed bit-select is not, by
     # itself, evidence of a memory; request/grant arbitration is not a
@@ -72,9 +75,27 @@ def _module_record(module: dict[str, Any], semantic_by: dict[str, dict[str, Any]
     if state: roles.append("state_machine_candidate")
     if any(p.get("direction") == "input" for p in ports) and any(p.get("direction") == "output" for p in ports):
         roles.append("input_output_transform_candidate")
+    source_file=module.get("source_file","")
+    try: source_hash=hashlib.sha256(Path(source_file).read_bytes()).hexdigest() if source_file else None
+    except OSError: source_hash=None
+    parameters=module.get("parameters",[])
+    port_names={str(p.get("name")) for p in ports}
+    internal=[]
+    for match in re.finditer(r"\b(logic|reg|wire|bit|integer|int)\s*(\[[^]]+\])?\s*([A-Za-z_$][\w$]*)",body):
+        signal=match.group(3)
+        if signal not in port_names:
+            internal.append({"name":signal,"type":match.group(1),"width":match.group(2) or "scalar/unspecified",
+                "classification":"CONFIRMED_FROM_PARSER","source_file":source_file,
+                "source_line":module.get("source_line_start")})
+    for port in ports:
+        port["provenance"]={"source_file":source_file,"source_line":module.get("source_line_start"),
+            "content_sha256":source_hash,"classification":"CONFIRMED_FROM_PARSER"}
     return {
         "name": name, "source_file": module.get("source_file", ""), "port_style": module.get("port_style", "unknown"),
-        "ports": [{k: p.get(k) for k in ("name", "direction", "width", "declaration")} for p in ports],
+        "ports": [{k: p.get(k) for k in ("name", "direction", "width", "declaration", "provenance")} for p in ports],
+        "parameters":parameters,"internal_signal_candidates":internal,
+        "provenance":{"source_file":source_file,"line_start":module.get("source_line_start"),
+                      "content_sha256":source_hash,"classification":"CONFIRMED_FROM_PARSER"},
         "port_count": len(ports), "procedural_constructs": {
             "always_ff": always_ff, "always_comb": always_comb, "always_latch": always_latch,
             "legacy_always_at": always_legacy, "total_candidate_blocks": procedural},
@@ -117,12 +138,13 @@ def build_universal_design_model(module_details: list[dict[str, Any]], hierarchy
     counts = Counter(p.get("direction", "unknown") for p in top_ports)
     return {
         "schema": "mverify.udm.v1",
+        "schema_version": "2.0",
         "project": {"root": project_dir, "selected_top": selected_top, "module_count": len(records)},
         "design_scope": "single_ip_or_subsystem_candidate" if len(records) < 12 else "multi_module_subsystem_or_soc_candidate",
         "modules": records,
-        "hierarchy": {"instances": hierarchy, "instance_count": len(hierarchy), "top_candidates": tops,
+        "hierarchy": {"instances": [{**edge,"classification":"INFERRED_FROM_RTL","provenance":"lexical instance parse"} for edge in hierarchy], "instance_count": len(hierarchy), "top_candidates": tops,
                       "connectivity_status": "candidate_hierarchy_only_unless_elaborator_resolves_connections"},
-        "top_interface": {"ports": [{k: p.get(k) for k in ("name", "direction", "width", "declaration")} for p in top_ports],
+        "top_interface": {"ports": [{k: p.get(k) for k in ("name", "direction", "width", "declaration", "provenance")} for p in top_ports],
                            "port_count": len(top_ports), "direction_counts": dict(counts),
                            "signal_relationship_candidates": _signals(top_body, top_ports)},
         "design_characteristics": {"feature_candidates": feature_ids,

@@ -104,6 +104,32 @@ def _header(source, pos):
     return source[i+1:end], semi+1, True, None
 
 
+def _parameters(source, pos):
+    """Extract simple ANSI parameter declarations without evaluating expressions."""
+    i=pos
+    while i<len(source) and source[i].isspace(): i+=1
+    if i>=len(source) or source[i]!="#": return []
+    i+=1
+    while i<len(source) and source[i].isspace(): i+=1
+    if i>=len(source) or source[i]!="(": return []
+    end=_matching(source,i)
+    if end<0: return []
+    result=[]; inherited_type=""
+    for item in _split_top(source[i+1:end]):
+        declaration=item.strip()
+        if not declaration: continue
+        lhs,sep,rhs=declaration.partition("=")
+        ids=re.findall(IDENT,lhs)
+        if not ids: continue
+        name=ids[-1]
+        prefix=lhs[:lhs.rfind(name)].strip()
+        if prefix: inherited_type=prefix
+        result.append({"name":name,"type":inherited_type or "unspecified",
+                       "default":rhs.strip() if sep else None,"declaration":declaration,
+                       "classification":"CONFIRMED_FROM_PARSER"})
+    return result
+
+
 def parse_rtl_text(text, source_name="<memory>"):
     src = _remove_comments(text)
     modules, warnings = [], []
@@ -131,7 +157,9 @@ def parse_rtl_text(text, source_name="<memory>"):
                         ports.append({"name": ids[-1], "direction": "unspecified",
                                       "width": "scalar/unspecified", "declaration": item})
         if issue: warnings.append(f"{source_name}: module {name}: {issue}")
-        modules.append({"name": name, "ports": ports, "source_file": source_name,
+        modules.append({"name": name, "ports": ports, "parameters":_parameters(src,m.end()),
+                        "source_line_start":src.count("\n",0,m.start())+1,
+                        "source_file": source_name,
                         "port_style": "ANSI" if ansi else ("non-ANSI/unknown" if port_text else "no-port-list"),
                         "body": src[body_start:end.start()]})
     if not modules and re.search(r"\bmodule\b", src):

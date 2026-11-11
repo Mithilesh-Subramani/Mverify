@@ -52,7 +52,7 @@ def test_wrr_weight_changes_apply_at_round_reload():
 
 
 def _wrr_report():
-    dut_dir = Path(__file__).resolve().parents[1] / "examples" / "rtl" / "pcie"
+    dut_dir = Path(__file__).resolve().parent / "fixtures" / "rtl" / "wrr_contract"
     return scan_project(dut_dir, requested_top="pcie_wrr_arbiter")
 
 

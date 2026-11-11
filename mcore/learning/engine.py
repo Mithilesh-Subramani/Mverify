@@ -73,12 +73,43 @@ class LearningEngine:
                 raise ValueError('Pending lesson not found; it may already be reviewed')
         return {'id': lesson_id, 'status': status, 'knowledge_promotion_allowed': bool(approve and consent)}
 
-    def list_experiences(self, limit=100):
+    def list_experiences(self, limit=100, project_id=None, status=None):
+        clauses=[]; args=[]
+        if project_id is not None: clauses.append("project_id=?"); args.append(str(project_id))
+        if status is not None: clauses.append("status=?"); args.append(str(status))
+        where=(" WHERE "+" AND ".join(clauses)) if clauses else ""
         with sqlite3.connect(self.path) as db:
-            rows = db.execute('SELECT id,created_at,project_id,task_type,status,notes FROM experiences ORDER BY created_at DESC LIMIT ?',
-                              (max(1,min(int(limit),500)),)).fetchall()
+            rows = db.execute('SELECT id,created_at,project_id,task_type,status,notes FROM experiences'+where+' ORDER BY created_at DESC LIMIT ?',
+                              (*args,max(1,min(int(limit),500)))).fetchall()
         keys = ['id','created_at','project_id','task_type','status','notes']
         return [dict(zip(keys, row)) for row in rows]
+
+    def review_experience(self, experience_id, reviewer, validation):
+        if not reviewer or not isinstance(validation, dict):
+            raise ValueError('reviewer and validation evidence are required')
+        if validation.get('validation_status') != 'EVIDENCE_VALIDATED' or not validation.get('engineering_reviewed'):
+            raise ValueError('Human review must attest EVIDENCE_VALIDATED provenance before promotion')
+        with sqlite3.connect(self.path) as db:
+            row=db.execute('SELECT evidence_json FROM experiences WHERE id=? AND status=?',(experience_id,'recorded')).fetchone()
+            if not row: raise ValueError('Recorded experience not found or already reviewed')
+            evidence=json.loads(row[0]); evidence['human_review']={**validation,'reviewer':str(reviewer),
+                'reviewed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            cur=db.execute('UPDATE experiences SET status=?,evidence_json=? WHERE id=? AND status=?',
+                ('validated',json.dumps(evidence,ensure_ascii=False),experience_id,'recorded'))
+            if cur.rowcount!=1: raise ValueError('Experience review could not be committed')
+        return {'id':experience_id,'status':'validated','reviewer':str(reviewer),'training_performed':False}
+
+    def list_validated_experiences(self, project_id, limit=10):
+        if not project_id: return []
+        with sqlite3.connect(self.path) as db:
+            rows=db.execute('SELECT id,created_at,project_id,task_type,task_json,prediction_json,outcome_json,evidence_json,notes FROM experiences WHERE project_id=? AND status=? ORDER BY created_at DESC LIMIT ?',
+                (str(project_id),'validated',max(1,min(int(limit),50)))).fetchall()
+        out=[]
+        for row in rows:
+            out.append({'id':row[0],'created_at':row[1],'project_id':row[2],'task_type':row[3],
+                'task':json.loads(row[4]),'prediction':json.loads(row[5]),'outcome':json.loads(row[6]),
+                'evidence':json.loads(row[7]),'notes':row[8],'validation_status':'validated'})
+        return out
 
     def list_lessons(self, status=None, limit=100):
         sql = 'SELECT id,created_at,experience_id,lesson,domain,status,consent,reviewer FROM lessons'

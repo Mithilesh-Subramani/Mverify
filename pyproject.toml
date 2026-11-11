@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mverify"
-version = "0.15.0"
-description = "Universal RTL design intelligence, adaptive verification planning and evidence-grounded engineering workbench"
+version = "0.16.0"
+description = "Mcore-centric, evidence-grounded RTL engineering intelligence and verification workbench"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["pypdf>=4,<6", "python-docx>=1,<2"]
