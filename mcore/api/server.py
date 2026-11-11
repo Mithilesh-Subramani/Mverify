@@ -50,7 +50,12 @@ def _json(handler, status, obj):
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        # The client may cancel a long-running local request. Do not emit a
+        # traceback that looks like an Mcore reasoning failure.
+        return
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -186,13 +191,22 @@ class Handler(BaseHTTPRequestHandler):
                 line_start=int(data["line_start"]) if data.get("line_start") is not None else None
                 line_end=int(data["line_end"]) if data.get("line_end") is not None else None
             except (TypeError,ValueError): return _json(self,400,{"error":"line_range_must_be_integer"})
-            result = KNOWLEDGE.ingest_text(
-                data.get("source", "unknown"), data.get("text", ""),
-                data.get("topic", "unclassified"), project_id,
-                module=data.get("module"),symbol=data.get("symbol"),line_start=line_start,
-                line_end=line_end,source_sha256=data.get("source_sha256"),
-            )
-            return _json(self, 201, result)
+            try:
+                result = KNOWLEDGE.ingest_text(
+                    data.get("source", "unknown"), data.get("text", ""),
+                    data.get("topic", "unclassified"), project_id,
+                    module=data.get("module"), symbol=data.get("symbol"), line_start=line_start,
+                    line_end=line_end, source_sha256=data.get("source_sha256"),
+                )
+                result["embedding_status"] = KNOWLEDGE.embedding_status()
+                return _json(self, 201, result)
+            except Exception as exc:
+                return _json(self, 503, {
+                    "error": "knowledge_ingestion_failed",
+                    "detail": str(exc),
+                    "project_id": project_id,
+                    "source": data.get("source", "unknown"),
+                })
         if route == "/knowledge/search":
             project_id = str(data.get("project_id") or "__legacy__")
             query=data.get("query","")

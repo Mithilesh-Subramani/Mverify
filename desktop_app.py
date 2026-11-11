@@ -299,7 +299,7 @@ class MverifyDesktop(tk.Tk):
         self.arch_combo=ttk.Combobox(bar,state="readonly",width=42);self.arch_combo.pack(side="left")
         ttk.Button(bar,text="Show architecture",command=self._show_arch).pack(side="left",padx=5)
         self.approve=tk.BooleanVar(value=False);ttk.Checkbutton(bar,text="I reviewed this topology proposal",variable=self.approve).pack(side="left",padx=5)
-        ttk.Button(bar,text="Generate UVM scaffold",command=self._generate).pack(side="left",padx=5)
+        ttk.Button(bar,text="Generate UVM environment",command=self._generate).pack(side="left",padx=5)
         ttk.Button(bar,text="RUN VERIFICATION",command=self._run_verification).pack(side="left",padx=5)
         ttk.Button(bar,text="Tool status",command=self._show_tool_status).pack(side="left",padx=5)
         ttk.Button(bar,text="Load simulator log",command=self._load_uvm_log).pack(side="left",padx=5)
@@ -326,8 +326,20 @@ class MverifyDesktop(tk.Tk):
             self._set(self.arch_text,content)
             self._set(self.topology_text,content)
             self.tabs.select(self.topology_tab)
-            self._log(f"Generated {result['files']} files and {result['tests']} selectable observation/scenario stubs in {result['output_dir']}.")
-            messagebox.showinfo("UVM scaffold generated",f"{result['output_dir']}\nGenerated topology preview is now shown in the Topology tab. Runtime topology is printed by UVM when the test reaches end_of_elaboration_phase.")
+            mode = result.get("mode", "unknown")
+            if mode == "active_confirmed_contract":
+                summary = ("Active WRR UVM generated. A sequencer, driver, monitor, "
+                           "sequence, reference model and functional scoreboard are present. "
+                           "This is generated code, not a passing simulation; compile and run it.")
+                self._log(f"Generated active WRR UVM in {result['output_dir']}. Simulation is still required.")
+            else:
+                summary = ("Passive observation environment generated. No active sequence is driven "
+                           "because this DUT's input protocol and expected behavior are not approved. "
+                           "For the WRR block, select pcie_wrr_arbiter as DUT top and scan it again. "
+                           "For the PCIe controller top, define and approve interface contracts before "
+                           "active stimulus can be generated.")
+                self._log(f"Generated passive UVM only for {top}; active stimulus is blocked pending an approved interface contract.")
+            messagebox.showinfo("UVM generation status", f"{summary}\n\nOutput: {result['output_dir']}")
         self._bg("Generating UVM scaffold…",
                  lambda:generate_uvm_project(self.report,out,top,architecture=a,requirements=self.requirements),
                  done)
@@ -435,12 +447,25 @@ class MverifyDesktop(tk.Tk):
         ttk.Label(self.mcore_tab,text="Mcore answers are project-scoped and show evidence IDs with source provenance. Missing models are reported; no model fallback is selected silently.",style="Muted.TLabel").pack(anchor="w",pady=8)
         self.mcore_text=self._text(self.mcore_tab)
 
-    def _mcore_request(self, endpoint, payload=None, timeout=30):
+    def _mcore_request(self, endpoint, payload=None, timeout=300):
         url=self.mcore_url.get().rstrip("/") + endpoint
         data=None if payload is None else json.dumps(payload).encode("utf-8")
         req=urllib.request.Request(url,data=data,headers={"Content-Type":"application/json"} if data is not None else {})
-        with urllib.request.urlopen(req,timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:2000]
+            raise RuntimeError(f"Mcore returned HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, BrokenPipeError) or "broken pipe" in str(reason).lower():
+                raise RuntimeError(
+                    f"Connection to Mcore was interrupted while waiting for {endpoint}. "
+                    f"The request may still be processing. Check Mcore logs and retry; "
+                    f"engineering requests now allow up to {timeout} seconds."
+                ) from exc
+            raise RuntimeError(f"Cannot reach Mcore endpoint {url}: {reason}") from exc
 
     def _check_mcore(self):
         def work():
