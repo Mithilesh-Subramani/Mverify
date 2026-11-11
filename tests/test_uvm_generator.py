@@ -16,9 +16,11 @@ def test_generates_uvm_tree_from_scanned_ports(tmp_path):
     assert (out/"agents/req_agent.sv").exists()
     agent=(out/"agents/req_agent.sv").read_text()
     assert "mverify_req_monitor" in agent
-    assert "driver.seq_item_port.connect" not in agent
+    assert "driver.seq_item_port.connect" in agent
+    assert "vif.req_valid <= tr.data" in agent
     assert "mverify_scoreboard" in (out/"env/mverify_env.sv").read_text()
-    assert "Topology-only compile smoke test" in (out/"tests/mverify_base_test.sv").read_text()
+    assert "mverify_smoke_sequence" in (out/"tests/mverify_base_test.sv").read_text()
+    assert "observed_count" in (out/"env/mverify_scoreboard.sv").read_text()
     assert (out/"GENERATION_STATUS.md").exists()
 
 
@@ -36,7 +38,7 @@ def test_generated_interfaces_do_not_repeat_dut_port_directions(tmp_path):
     assert "pcie_pkg::cpl_backend_req_t backend_req;" in interface
 
 
-def test_generator_is_passive_and_filelist_does_not_compile_included_items_twice(tmp_path):
+def test_generator_adds_bounded_smoke_stimulus_and_filelist_does_not_compile_included_items_twice(tmp_path):
     report = {
       "module_details": [{"name":"dut_top","ports":[
         {"name":"clk","direction":"input","declaration":"input logic clk","width":"scalar/unspecified"},
@@ -48,7 +50,7 @@ def test_generator_is_passive_and_filelist_does_not_compile_included_items_twice
     flist=(out/"mverify.f").read_text()
     assert "mverify_items.sv" not in flist
     assert "mverify_uvm_pkg.sv" in flist
-    assert not (out/"sequences/mverify_smoke_sequence.sv").exists()
+    assert "mverify_smoke_sequence" in (out/"mverify_items.sv").read_text()
     assert "generation_mode" in (out/"mverify_generation_manifest.json").read_text()
 
 

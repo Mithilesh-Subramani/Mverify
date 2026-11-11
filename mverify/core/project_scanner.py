@@ -7,6 +7,10 @@ from .rtl_parser import parse_rtl_file, _remove_comments
 from mverify.protocols.pcie.discovery import discover_pcie
 from .feature_analyzer import analyze_features
 from .rtl_semantic_analyzer import analyze_semantics
+from .sv_frontend import run_surelog, build_design_graph
+from .project_inventory import inventory_project
+from .topology import build_topology
+from .tool_probe import probe_tools
 
 LOG = logging.getLogger(__name__)
 RTL_SUFFIXES = {".v", ".vh", ".sv", ".svh"}
@@ -49,10 +53,56 @@ def _find_instances(module_details):
     return edges
 
 
+
+def _parse_filelists(project_dir: Path):
+    """Read common VCS/Questa-style .f entries and resolve paths conservatively."""
+    filelists=sorted(project_dir.rglob("*.f"))
+    result=[]; sources=[]; include_dirs=[]; defines=[]; warnings=[]
+    seen=set()
+    def consume(path, stack):
+        path=path.resolve()
+        if path in stack:
+            warnings.append(f"Recursive filelist include detected: {path}"); return
+        if not path.exists():
+            warnings.append(f"Filelist does not exist: {path}"); return
+        try: lines=path.read_text(encoding="utf-8",errors="replace").splitlines()
+        except OSError as exc:
+            warnings.append(f"Cannot read filelist {path}: {exc}"); return
+        result.append(str(path))
+        for raw in lines:
+            line=raw.strip()
+            if not line or line.startswith("#"): continue
+            line=line.split("//",1)[0].strip()
+            if not line: continue
+            if line.startswith("+incdir+"):
+                for value in line[len("+incdir+"):].split():
+                    q=(path.parent/value).resolve()
+                    if str(q) not in include_dirs: include_dirs.append(str(q))
+            elif line.startswith("+define+"):
+                defines.extend(x for x in line[len("+define+"):].split() if x)
+            elif line.startswith("-f ") or line.startswith("-F "):
+                child=(path.parent/line[3:].strip()).resolve(); consume(child,stack|{path})
+            elif line.startswith("-v "):
+                q=(path.parent/line[3:].strip()).resolve(); sources.append(str(q))
+            elif line.startswith("+") or line.startswith("-"):
+                # Preserve other simulator options in the manifest; do not treat them as source paths.
+                continue
+            else:
+                q=Path(line)
+                if not q.is_absolute(): q=(path.parent/q).resolve()
+                if q.suffix.lower() in RTL_SUFFIXES and str(q) not in seen:
+                    seen.add(str(q)); sources.append(str(q))
+    for fl in filelists: consume(fl,set())
+    return {"filelists":result,"compile_sources":sources,"include_dirs":include_dirs,"defines":sorted(set(defines)),"warnings":warnings}
+
 def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     project_dir = Path(project_dir).expanduser().resolve()
-    files = list(_rtl_files(project_dir))
-    module_details, warnings, source_texts = [], [], []
+    discovered_files = list(_rtl_files(project_dir))
+    build_inputs = _parse_filelists(project_dir)
+    # The compile filelist is authoritative when it resolves source files.
+    compile_paths = [Path(x) for x in build_inputs.get("compile_sources", []) if Path(x).is_file()]
+    files = compile_paths if compile_paths else discovered_files
+    module_details, warnings, source_texts = [], list(build_inputs.get("warnings", [])), []
     for path in files:
         modules, file_warnings = parse_rtl_file(path)
         try:
@@ -90,6 +140,9 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
         "summary": {"rtl_files": len(files), "modules": len(module_details),
                     "hierarchy_instances": len(edges), "warnings": len(warnings)},
         "files": [str(p) for p in files],
+        "discovered_files": [str(p) for p in discovered_files],
+        "source_selection": "resolved_compile_filelist" if compile_paths else "recursive_discovery_fallback",
+        "build_inputs": build_inputs,
         "module_details": public_modules,
         "hierarchy": edges,
         "top_candidates": candidates,
@@ -104,5 +157,10 @@ def scan_project(project_dir: Path, requested_top: str | None = None) -> dict:
     report["architecture_discovery"] = discover_pcie(report)
     report["feature_analysis"] = feature_report
     report["semantic_analysis"] = analyze_semantics(module_details, edges)
+    report["design_graph"] = build_design_graph(report)
+    report["elaboration"] = run_surelog(project_dir, build_inputs, selected_top)
+    report["project_inventory"] = inventory_project(project_dir)
+    report["topology"] = build_topology(report, selected_top)
+    report["toolchain"] = probe_tools()
     report.pop("_source_text", None)
     return report

@@ -19,3 +19,13 @@ def test_scan_parameterized_child_instance(tmp_path: Path):
     report = scan_project(tmp_path)
     assert report["top_candidates"] == ["top"]
     assert report["hierarchy"][0]["instance"] == "u0"
+
+
+def test_scanner_records_vcs_filelist_inputs(tmp_path):
+    rtl=tmp_path/"rtl"; rtl.mkdir()
+    (rtl/"dut.sv").write_text("module dut(input logic clk); endmodule")
+    (tmp_path/"dut.f").write_text("+incdir+rtl\n+define+SIM\nrtl/dut.sv\n")
+    report=scan_project(tmp_path)
+    assert report["build_inputs"]["filelists"]
+    assert any(x.endswith("dut.sv") for x in report["build_inputs"]["compile_sources"])
+    assert "SIM" in report["build_inputs"]["defines"]

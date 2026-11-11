@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mverify"
+version = "0.11.0"
+description = "Local-first RTL design intelligence and verification workbench"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pypdf>=4,<6", "python-docx>=1,<2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7,<9"]
+
+[project.scripts]
+mverify = "mverify.desktop:main"
+
+[tool.setuptools.packages.find]
+include = ["mverify*", "mcore*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "Mcore/tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"

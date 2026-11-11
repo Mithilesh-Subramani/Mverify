@@ -10,6 +10,7 @@ from mverify.core.verification_planner import generate_verification_plan
 from mverify.core.requirement_intelligence import apply_auto_triage
 from mverify.core.uvm_generator import generate_uvm_project
 from mverify.core.design_intelligence import build_dut_model, propose_architectures, generate_intelligence
+from mverify.core.mcore_learning_client import record_mcore_experience
 
 st.set_page_config(page_title="Mverify", page_icon="🧪", layout="wide")
 config = load_config()
@@ -279,6 +280,40 @@ if report:
                         try:
                             result = generate_uvm_project(report, output_dir, chosen_top, architecture=selected_arch)
                             st.session_state["uvm_generation"] = result
+                            learning_result = record_mcore_experience(
+                                task_type="uvm_generation",
+                                task={
+                                    "dut_top": chosen_top,
+                                    "project_dir": report.get("project_dir", ""),
+                                    "architecture_id": selected_arch.get("id", ""),
+                                    "architecture_name": selected_arch.get("name", ""),
+                                    "rtl_file_count": report.get("summary", {}).get("rtl_files", 0),
+                                    "module_count": report.get("summary", {}).get("modules", 0),
+                                },
+                                prediction={
+                                    "expected_output": "DUT-specific UVM scaffold generated from the selected architecture",
+                                    "expected_file_count": result.get("files"),
+                                    "expected_agents": result.get("agents", []),
+                                },
+                                outcome={
+                                    "generation_status": "success",
+                                    "output_dir": result.get("output_dir", output_dir),
+                                    "file_count": result.get("files"),
+                                    "agents": result.get("agents", []),
+                                },
+                                evidence={
+                                    "source": "Mverify UVM generator",
+                                    "generated_output_dir": result.get("output_dir", output_dir),
+                                    "generation_result": result,
+                                    "note": "Generation success is not proof of protocol correctness or functional verification.",
+                                },
+                                project_id=str(report.get("project_dir", "")),
+                                notes="Automatically captured after successful UVM generation; no model weights were changed.",
+                            )
+                            if learning_result.get("recorded"):
+                                st.success("Mcore recorded this UVM generation as an engineering experience.")
+                            else:
+                                st.warning("UVM generation succeeded, but Mcore experience capture failed: " + learning_result.get("error", "unknown error"))
                             st.success("Generated architecture package with %s files."%result["files"])
                         except Exception as exc: st.error("UVM generation failed: %s"%exc)
                 generated = st.session_state.get("uvm_generation")
