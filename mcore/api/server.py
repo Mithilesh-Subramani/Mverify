@@ -8,6 +8,7 @@ import uuid
 
 from mcore.config import load_config
 from mcore.core.ollama import OllamaClient
+from mcore.core.model_router import HybridModelRouter
 from mcore.core.knowledge import KnowledgeStore
 from mcore.training.dataset import TrainingDataset
 from mcore.learning.engine import LearningEngine
@@ -149,9 +150,14 @@ class Handler(BaseHTTPRequestHandler):
                     retrieved_knowledge=retrieved,
                     validated_experiences=LEARNING.list_validated_experiences(project_id, limit=6),
                     max_chars=CONFIG.max_context_chars)
-                response = EngineeringReasoner(client).reason(
+                router = HybridModelRouter(local_client=client)
+                # Cloud inference is opt-in per request and only for data the
+                # engineer explicitly classifies as approved for cloud use.
+                response = EngineeringReasoner(router).reason(
                     task, project_context=context.get("project_context"),
                     evidence_context=context,
+                    cloud_approved=data.get("cloud_approved") is True,
+                    data_classification=str(data.get("data_classification", "sensitive")),
                 )
                 response["retrieved_sources"] = [
                     {"source": item["source"], "topic": item["topic"], "score": item["score"],

@@ -117,11 +117,20 @@ class EngineeringReasoner:
 
     def reason(self, task, rtl_evidence=None, spec_evidence=None,
                tool_evidence=None, retrieved_knowledge=None, project_context=None,
-               evidence_context=None):
+               evidence_context=None, cloud_approved=False,
+               data_classification="sensitive"):
         prompt = build_engineering_prompt(task, rtl_evidence, spec_evidence,
                                           tool_evidence, retrieved_knowledge, project_context,
                                           evidence_context=evidence_context)
-        result = self.client.generate_json(prompt)
+        if hasattr(self.client, "generate_json_with_policy"):
+            result = self.client.generate_json_with_policy(
+                prompt, cloud_approved=cloud_approved,
+                data_classification=data_classification,
+            )
+            model_route = getattr(self.client, "last_route", "local")
+        else:
+            result = self.client.generate_json(prompt)
+            model_route = "local_or_custom_client"
         errors = validate_reasoning_result(result)
         validation = validate_engineering_claims(result, (evidence_context or {}).get("evidence", []),
                                                   (evidence_context or {}).get("project_id", "")) if not errors else {
@@ -135,6 +144,7 @@ class EngineeringReasoner:
             "schema_errors": errors,
             "claim_validation": validation,
             "model": getattr(self.client, "model", "unknown"),
+            "model_route": model_route,
             "execution_status": "model_response_received",
             "validation_status": validation["status"] if not errors else "ENGINEERING_REVIEW_REQUIRED",
         }

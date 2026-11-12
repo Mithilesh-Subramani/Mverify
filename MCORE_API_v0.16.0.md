@@ -38,3 +38,12 @@ Reasoning results include schema validation, claim-validation status, evidence r
 ## Configuration
 
 See `.env.example` and `mcore/config.py`. The defaults are loopback-only. Do not expose Mcore or Ollama on a public interface. `MCORE_HOME` is the private persistent data directory. Migrations back up databases before schema changes. The API is an engineering-local API, not an authenticated network service; access should remain host-local and protected by OS account controls.
+
+## Hybrid routing fields (v0.16.2)
+
+The engineering reasoning POST endpoints accept two optional fields:
+
+- `cloud_approved` (boolean, default false)
+- `data_classification` (string, default `sensitive`)
+
+The router uses local Ollama unless cloud is enabled in the server environment and the individual request explicitly sets `cloud_approved: true` and `data_classification: "approved_for_cloud"`. Cloud configuration uses `MCORE_CLOUD_ENABLED`, `MCORE_CLOUD_BASE_URL`, `MCORE_CLOUD_API_KEY`, and `MCORE_CLOUD_MODEL`. The cloud adapter expects an OpenAI-compatible `/chat/completions` endpoint. A cloud failure is returned as an error; the router does not silently send the prompt to a different provider.

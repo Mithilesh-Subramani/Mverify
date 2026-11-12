@@ -1,4 +1,4 @@
-# Mverify 0.16.0 — Mcore-Centric RTL Engineering Intelligence
+# Mverify 0.16.2 — Mcore-Centric RTL Verification Intelligence
 
 Mverify is the RTL project workbench; Mcore is its separately runnable local reasoning and retrieval service. Together they provide project inventory, a source-grounded Universal Design Model (UDM), requirement triage, scoped retrieval, evidence-checked engineering answers, verification planning and UVM scaffold generation.
 
@@ -54,5 +54,15 @@ Mcore stores its SQLite databases under `MCORE_HOME` (default `~/.mcore`). Start
 ## Engineering boundaries
 
 UDM and the lightweight parser are evidence-bearing structural summaries, not a full SystemVerilog elaborator. Mcore validates claim schema, evidence IDs, project scope and certain metadata conflicts; it cannot prove semantic correctness. Retrieval is project-isolated and uses embeddings when the configured Ollama embed model is available, with visible lexical fallback. Generated UVM is a scaffold; actual DUT simulation is performed only when an operator explicitly approves an allowlisted project and VCS action. Passing Python tests do not establish RTL functionality, coverage closure, timing, or Verdi usability.
+
+## v0.16.2 verification intelligence additions
+
+- **Interface candidate discovery:** identifies exact valid/ready naming pairs and records their directions. These are review candidates, not proven protocol contracts.
+- **Handshake trace analysis:** imports wide or long CSV signal samples and measures accepted cycles, stalled cycles, longest observed stall and unknown samples. No protocol latency limit is assumed.
+- **RTL change snapshots:** hashes RTL and build inputs under the project-local `.mverify/snapshots/` directory and reports added, removed and modified files.
+- **Verification readiness report:** summarizes interface candidates, FSM candidates, requirement review state and explicit evidence limitations.
+- **Hybrid model routing:** Ollama remains the default. Cloud inference is disabled by default and requires configured credentials plus an explicit per-request `cloud_approved=true` and `data_classification="approved_for_cloud"`. Sensitive project data stays on the local route by default.
+
+The Streamlit workbench is optional. Install it with `python -m pip install '.[ui]'`, then run `streamlit run app.py`. The desktop application remains available through `python desktop_app.py`.
 
 See `KNOWN_LIMITATIONS_v0.16.0.md`, `MCORE_API_v0.16.0.md` and `UNIVERSAL_RTL_ARCHITECTURE.md`.

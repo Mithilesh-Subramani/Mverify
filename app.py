@@ -11,6 +11,10 @@ from mverify.core.requirement_intelligence import apply_auto_triage
 from mverify.core.uvm_generator import generate_uvm_project
 from mverify.core.design_intelligence import build_dut_model, propose_architectures, generate_intelligence
 from mverify.core.mcore_learning_client import record_mcore_experience
+from mverify.core.verification_intelligence import (
+    build_verification_readiness, capture_project_snapshot, compare_project_snapshots,
+    discover_interface_contracts, analyze_handshake_samples, load_signal_csv,
+)
 
 st.set_page_config(page_title="Mverify", page_icon="🧪", layout="wide")
 config = load_config()
@@ -19,7 +23,7 @@ initialize_database(config.database_path)
 
 st.title("Mverify")
 st.caption("Local-first RTL design verification assistant")
-st.info("Mverify v0.8.0 — DUT-specific verification reasoning, architecture proposals, and approval-led UVM generation.")
+st.info("Mverify v0.16.1 — evidence-grounded RTL analysis, protocol-aware verification planning, and simulation intelligence.")
 
 with st.sidebar:
     st.header("Project")
@@ -352,6 +356,99 @@ if report:
         st.subheader("Warnings")
         for warning in report["warnings"]:
             st.warning(warning)
+
+    st.divider()
+    st.header("Protocol and runtime verification intelligence")
+    st.caption("This layer adds reviewable interface candidates, measured handshake stalls from exported signal samples, and RTL change snapshots. It does not infer legal protocol latency or declare compliance from signal names.")
+
+    readiness = build_verification_readiness(report, st.session_state.get("mapped_requirements", []))
+    contracts = readiness.get("interface_contract_candidates", [])
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Handshake candidates", len(contracts))
+    r2.metric("FSM candidates", len(readiness.get("state_machine_candidates", [])))
+    r3.metric("Approved requirements", readiness["requirements"]["approved"])
+
+    if contracts:
+        st.subheader("Candidate interface contracts")
+        st.dataframe([{
+            "Interface": x["interface_id"],
+            "Valid": f'{x["valid_signal"]} ({x["valid_direction"]})',
+            "Ready": f'{x["ready_signal"]} ({x["ready_direction"]})',
+            "Quality": x["candidate_quality"],
+            "Review required": x["review_required"],
+        } for x in contracts], use_container_width=True)
+        with st.expander("Inspect interface assumptions and review items"):
+            for item in contracts:
+                st.markdown(f'**{item["interface_id"]}**')
+                st.json({"acceptance_expression_candidate": item["acceptance_expression"],
+                         "classification": item["classification"],
+                         "not_established": item["not_established"]})
+    else:
+        st.info("No exact valid/ready naming pairs were detected. This does not prove that the DUT has no handshake interfaces.")
+
+    st.subheader("Handshake stall analysis")
+    st.write("Export a CSV from your simulator or waveform tool. Supported formats: wide (`cycle,tx_valid,tx_ready`) or long (`cycle,signal,value`).")
+    trace_file = st.file_uploader("Upload signal-sample CSV", type=["csv"], key="mcore_handshake_trace")
+    if trace_file is not None:
+        try:
+            trace_path = Path(config.log_dir) / f"handshake_trace_{Path(trace_file.name).name}"
+            trace_bytes = trace_file.getvalue()
+            if len(trace_bytes) > 20 * 1024 * 1024:
+                raise ValueError("CSV upload exceeds the 20 MB limit.")
+            trace_path.write_bytes(trace_bytes)
+            samples = load_signal_csv(trace_path)
+            contract_ids = [x["interface_id"] for x in contracts]
+            if contract_ids:
+                selected_contract_id = st.selectbox("Interface to analyse", contract_ids, key="mcore_trace_contract")
+                selected_contract = next(x for x in contracts if x["interface_id"] == selected_contract_id)
+                if st.button("Analyse handshake stalls"):
+                    analysis = analyze_handshake_samples(samples, [selected_contract])
+                    st.session_state["mcore_handshake_analysis"] = analysis
+            else:
+                st.warning("No candidate interface is available for automatic signal pairing. Review signal names and upload a manually mapped trace in a future release.")
+        except Exception as exc:
+            st.error(f"Could not read signal CSV: {exc}")
+    handshake_result = st.session_state.get("mcore_handshake_analysis")
+    if handshake_result:
+        for item in handshake_result.get("interfaces", []):
+            a, b, c, d = st.columns(4)
+            a.metric("Accepted cycles", item["accepted_cycles"])
+            b.metric("Stalled cycles", item["stalled_cycles"])
+            c.metric("Longest stall", item["longest_observed_stall_cycles"])
+            d.metric("Unknown samples", item["unknown_or_missing_samples"])
+            st.caption(item["interpretation_limit"])
+        st.download_button("Download handshake analysis (JSON)", data=__import__("json").dumps(handshake_result, indent=2), file_name="mverify_handshake_analysis.json", mime="application/json")
+
+    st.subheader("RTL change-impact snapshots")
+    st.caption("Snapshots hash RTL and build inputs. A file-level diff identifies what changed; run a fresh scan before treating the change as semantic impact.")
+    if st.button("Capture snapshot and compare with previous"):
+        try:
+            snapshot = capture_project_snapshot(Path(report["project_dir"]))
+            snapshot_dir = Path(report["project_dir"]) / ".mverify" / "snapshots"
+            prior_paths = sorted(snapshot_dir.glob("*.json"))
+            prior_paths = [x for x in prior_paths if x.name != Path(snapshot["snapshot_path"]).name]
+            st.session_state["mcore_latest_snapshot"] = snapshot
+            if prior_paths:
+                previous = __import__("json").loads(prior_paths[-1].read_text(encoding="utf-8"))
+                diff = compare_project_snapshots(previous, snapshot)
+                st.session_state["mcore_snapshot_diff"] = diff
+            else:
+                st.session_state["mcore_snapshot_diff"] = None
+        except Exception as exc:
+            st.error(f"Snapshot failed: {exc}")
+    latest_snapshot = st.session_state.get("mcore_latest_snapshot")
+    if latest_snapshot:
+        st.success(f'Snapshot captured: {latest_snapshot["file_count"]} tracked files.')
+        st.caption(latest_snapshot["snapshot_path"])
+        diff = st.session_state.get("mcore_snapshot_diff")
+        if diff is None:
+            st.info("This is the first snapshot. Capture another snapshot after an RTL or build-input change to obtain a diff.")
+        else:
+            st.write(f'Change status: **{diff["status"]}** — {diff["change_count"]} changed files')
+            st.json({"added": diff["added"], "removed": diff["removed"], "modified": diff["modified"]})
+
+    with st.expander("Verification readiness gates and limitations"):
+        st.json({"readiness_gates": readiness["readiness_gates"], "limitations": readiness["limitations"]})
 
     st.download_button(
         "Download scan report (JSON)",
